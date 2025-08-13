@@ -1,0 +1,2029 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Moto 2D - Endless Runner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Planck.js (Box2D port) -->
+  <script src="https://unpkg.com/planck@1.0.0/dist/planck.min.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #87CEEB;
+      font-family: "Trebuchet MS", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      user-select: none;
+      overscroll-behavior: none;
+    }
+    #game {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: linear-gradient(#78c8ff, #bde1ff 60%, #e6f6ff 100%);
+      outline: none;
+      cursor: none; /* cleaner feel */
+    }
+    .overlay {
+      position: absolute;
+      left: 50%;
+      top: 15%;
+      transform: translateX(-50%);
+      background: rgba(255,255,255,0.92);
+      border: 4px solid #333;
+      border-radius: 12px;
+      padding: 18px 20px;
+      min-width: 360px;
+      color: #111;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+    }
+    .title {
+      font-size: 28px;
+      font-weight: 900;
+      color: #222;
+      text-align: center;
+      margin: 6px 0 10px 0;
+      text-shadow: 1px 2px 0 #fff;
+    }
+    .menu-btns {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #ffce3a;
+      border: 3px solid #333;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-weight: 800;
+      color: #222;
+      cursor: pointer;
+      transition: transform 0.07s ease, background 0.2s ease;
+    }
+    button:hover { background: #ffd75f; }
+    button:active { filter: brightness(0.95); }
+    button[disabled] { opacity: 0.5; cursor: not-allowed; filter: grayscale(0.2); }
+    .caption {
+      font-size: 13px;
+      color: #333;
+      text-align: center;
+      margin-top: 6px;
+    }
+    .hud {
+      position: absolute;
+      left: 12px;
+      top: 10px;
+      font-weight: 900;
+      color: #102a43;
+      text-shadow: 0 2px 0 rgba(255,255,255,0.65);
+      font-size: 16px;
+      pointer-events: none;
+    }
+    .hud-right {
+      position: absolute;
+      right: 12px;
+      top: 10px;
+      font-weight: 900;
+      color: #102a43;
+      text-shadow: 0 2px 0 rgba(255,255,255,0.65);
+      font-size: 16px;
+      pointer-events: none;
+    }
+    .hud-center {
+      position: absolute;
+      left: 50%;
+      top: 10px;
+      transform: translateX(-50%);
+      font-weight: 900;
+      color: #102a43;
+      text-shadow: 0 2px 0 rgba(255,255,255,0.65);
+      font-size: 16px;
+      pointer-events: none;
+    }
+    /* New cartoon HUD box (single block, top-left) */
+    .hudbox {
+      position: absolute;
+      left: 12px;
+      top: 10px;
+      background: rgba(255,255,255,0.9);
+      border: 4px solid #333;
+      border-radius: 12px;
+      padding: 8px 10px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+      color: #102a43;
+      font-weight: 900;
+      pointer-events: none;
+      min-width: 170px;
+    }
+    .hudbox .hudline {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      margin: 2px 0;
+    }
+    .hudbox .hudlabel {
+      background: #ffce3a;
+      border: 2px solid #333;
+      border-radius: 8px;
+      padding: 2px 6px;
+      font-size: 12px;
+      color: #222;
+      text-shadow: 1px 1px 0 #fff;
+    }
+    .leaderboard {
+      width: 440px;
+      margin: 0 auto;
+      background: rgba(255,255,255,0.97);
+      border: 3px solid #333;
+      border-radius: 10px;
+      padding: 10px;
+      max-height: 60vh;
+      overflow: auto;
+    }
+    .lb-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      padding: 6px 0;
+      border-bottom: 1px dashed #ccc;
+      font-weight: 700;
+      color: #333;
+    }
+    .lb-row.header {
+      color: #000;
+      text-transform: uppercase;
+      border-bottom: 2px solid #333;
+    }
+    .hidden { display: none; }
+    .center { text-align: center; }
+    .small {
+      font-size: 12px;
+      color: #333;
+    }
+    #nameInput {
+      display: block;
+      width: 160px;
+      font-size: 18px;
+      margin: 8px auto;
+      text-align: center;
+      padding: 6px 8px;
+      border: 3px solid #333;
+      border-radius: 8px;
+      font-weight: 800;
+    }
+    .kbd {
+      display: inline-block;
+      border: 2px solid #222;
+      border-bottom-width: 4px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: #fff;
+      margin: 0 3px;
+      min-width: 20px;
+      text-align: center;
+      font-weight: 800;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      background: #44d07b;
+      border: 2px solid #222;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 900;
+      color: #102a43;
+      vertical-align: middle;
+    }
+
+    /* Modern full-screen menu */
+    .menu-screen {
+      position: fixed;
+      inset: 0;
+      background-image: url('assets/img/crococross-bg.png');
+      background-size: cover;
+      background-position: center;
+      z-index: 5;
+    }
+    .menu-screen.hidden { display: none; }
+    .menu-scrim {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.35) 60%, rgba(0,0,0,0.45) 100%);
+      pointer-events: none;
+    }
+    .menu-logo {
+      position: absolute;
+      left: calc(clamp(16px, 6vw, 64px) + 200px);
+      top: clamp(16px, 5vh, 56px);
+      width: clamp(180px, 24vw, 360px);
+      height: auto;
+      filter: drop-shadow(0 8px 18px rgba(0,0,0,0.5));
+      user-select: none;
+      pointer-events: none;
+    }
+    .play-big {
+      position: absolute;
+      left: 50%;
+      top: 58%;
+      transform: translate(-50%, -50%);
+      font-size: clamp(20px, 3.2vw, 32px);
+      padding: clamp(12px, 1.8vw, 18px) clamp(28px, 3vw, 36px);
+      border-width: 5px;
+      border-radius: 16px;
+      background: #ffce3a;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+    }
+    .leaderboard-side {
+      position: absolute;
+      right: clamp(16px, 3vw, 36px);
+      top: 50%;
+      transform: translateY(-50%);
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      letter-spacing: 1px;
+      font-size: clamp(14px, 1.6vw, 18px);
+      padding: 14px 10px;
+      border-width: 4px;
+      border-radius: 12px;
+      background: #ffffffd0;
+    }
+    .controls-card {
+      position: absolute;
+      left: clamp(16px, 6vw, 64px);
+      bottom: clamp(16px, 6vh, 64px);
+      background: rgba(255,255,255,0.92);
+      border: 4px solid #333;
+      border-radius: 14px;
+      padding: 12px 14px;
+      color: #111;
+      width: clamp(240px, 28vw, 420px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    }
+    .controls-title {
+      font-weight: 900;
+      font-size: clamp(16px, 2vw, 20px);
+      margin-bottom: 6px;
+      color: #111;
+      text-shadow: 1px 1px 0 #fff;
+    }
+    .controls-rows .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 0;
+      font-weight: 800;
+      color: #222;
+      font-size: clamp(13px, 1.6vw, 16px);
+    }
+    .music-btn {
+      background: #ffffff;
+      border: 3px solid #333;
+      border-radius: 10px;
+      padding: 6px 10px;
+      font-weight: 900;
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="1280" height="720"></canvas>
+
+  <div id="menu" class="menu-screen">
+    <img src="assets/img/crococross-logo.png" alt="CrocoCross" class="menu-logo" />
+    <button id="playBtn" class="play-big">Play</button>
+    <button id="leaderboardBtn" class="leaderboard-side">Leaderboard</button>
+    <div class="controls-card">
+      <div class="controls-title">Controls</div>
+      <div class="controls-rows">
+        <div class="row"><span class="kbd">→</span><span>Accelerate / Tilt forward (air)</span></div>
+        <div class="row"><span class="kbd">←</span><span>Brake/Reverse / Tilt back (air)</span></div>
+        <div class="row"><span class="kbd">Esc</span><span>Pause</span></div>
+        <div class="row"><span class="badge">Music</span><button id="musicBtn" type="button" class="music-btn">Music: 1</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="leaderboardView" class="overlay hidden">
+    <div class="title">Leaderboard</div>
+    <div class="leaderboard" id="leaderboardList">
+      <!-- rows injected -->
+    </div>
+    <div class="menu-btns">
+      <button id="lbBackBtn">Back</button>
+    </div>
+  </div>
+
+  <div id="gameOver" class="overlay hidden">
+    <div class="title">Game Over</div>
+    <div class="center" id="finalScoreText">Score: 0 m</div>
+    <div id="namePrompt" class="center hidden">
+      <div class="small">New high score! Enter initials (3):</div>
+      <input type="text" id="nameInput" maxlength="3" placeholder="AAA" />
+    </div>
+    <div class="menu-btns">
+      <button id="saveScoreBtn" class="hidden" disabled>Save Score</button>
+    </div>
+  </div>
+
+  <div id="hudBox" class="hudbox">
+    <div class="hudline"><span class="hudlabel">Distance</span><span id="hudDist">0 m</span></div>
+    <div class="hudline"><span class="hudlabel">Speed</span><span id="hudSpeed">0 km/h</span></div>
+    <div class="hudline"><span class="hudlabel">Lives</span><span id="hudLives">5/5</span></div>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+
+  // Aliases for Planck
+  const pl = planck;
+  const Vec2 = pl.Vec2;
+
+  // CONFIG - tunables in one place
+  const CONFIG = {
+    SCALE: 40,                        // px per meter
+    GRAVITY: 9.81,                    // m/s^2
+    FIXED_HZ: 60,                     // physics Hz
+    CHUNK_LENGTH: 60,                 // meters per terrain chunk
+    SAMPLE_DX: 1.2,                   // meter sampling step
+    GROUND_THICK: 4,                  // line width for drawing contour
+    GROUND_FRICTION: 1.2,
+    GROUND_RESTITUTION: 0.0,
+
+    BASELINE_Y: -20,                  // for ground fill (below the lowest terrain in chunk)
+
+    MAX_LIVES: 5,
+    CHECKPOINT_EVERY: 200,            // meters
+
+    // Terrain noise
+    NOISE: {
+      base: -2.0,                     // average ground height (m)
+      amp1: 1.8, freq1: 0.05,         // first octave (slightly stronger, longer wavelength)
+      amp2: 0.9, freq2: 0.12,         // second octave
+      amp3: 0.5, freq3: 0.25          // third octave
+    },
+
+    // Difficulty progression
+    SLOPE_MAX_START: 0.6,             // tan(theta) ~ slope (0.6 ~ 31 deg)
+    SLOPE_MAX_END: 0.9,               // max slope later (~42 deg cap)
+    HOLE_PROB_START: 0.10,            // early probability
+    HOLE_PROB_END: 0.30,              // later probability
+    HOLE_W_MIN: 4.5,
+    HOLE_W_MAX_START: 7.0,
+    HOLE_W_MAX_END: 10.0,
+    HOLE_RUNUP_MIN: 7.0,              // (m)
+    HOLE_LAND_MIN: 7.0,
+    HOLE_RAMP_LEN: 6.0,               // meters of ramp shaping before hole
+    HOLE_MIN_SPACING: 35.0,           // avoid back-to-back holes too close
+    START_SAFE_UNTIL: 100.0,          // no holes before this X (m) from start
+    START_FLAT_UNTIL: 8.0,           // short flat pad near start
+    START_BLEND_LEN: 12.0,            // smooth blend; hills visible by ~20 m
+    SEAM_BLEND_LEN: 6.0,             // meters to blend first points of each new chunk to previous end to avoid steps
+
+    // Jump feasibility heuristic (caps hole width to what is realistically jumpable)
+    SAFE_JUMP: {
+      JUMP_SPEED_START: 7.0,          // m/s early game
+      JUMP_SPEED_END: 12.0,           // m/s late game
+      MIN_TAKEOFF_ANGLE: 0.17,        // radians (~10 deg)
+      MAX_TAKEOFF_ANGLE: 0.61,        // radians (~35 deg)
+      RUNUP_SLOPE_MAX: 0.25,          // tan(theta) ~ 0.25 (~14 deg)
+      LANDING_SLOPE_MAX: 0.35,        // ~19 deg
+      SAFETY_MARGIN: 1.2              // meters subtracted from theoretical range
+    },
+    // Checkpoint safety near lips and forward-ground availability
+    CP_SAFE_FORWARD: 6.0,             // meters of solid ground required ahead of a checkpoint
+    CP_LIP_MARGIN: 0.8,               // avoid placing directly on a hole lip (± margin)
+    CP_SEARCH_RADIUS: 10.0,           // search window around nominal CP X
+    CP_STEP: 0.5,                     // scan step while searching a safe CP spot
+
+    // Decorative content (images) — counts per 60 m chunk
+    DECOR: {
+      treePerChunk: 1.4,
+      rockPerChunk: 0.7,
+      minSpacing: 12.0,
+      treeScaleMin: 0.9,
+      treeScaleMax: 1.2,
+      rockScaleMin: 0.85,
+      rockScaleMax: 1.15
+    },
+
+    // Image clouds (parallax)
+    CLOUDS: {
+      count: 10,
+      parallax: 0.06,
+      scaleMin: 0.7,
+      scaleMax: 1.2
+    },
+
+    // Audio
+    AUDIO: {
+      default: 'music1',        // 'music1' | 'music2' | 'off'
+      volume: 0.5
+    },
+
+    // Bike params
+    BIKE: {
+      CHASSIS: { w: 2.0, h: 0.5, density: 1.2, angularDamping: 0.5, friction: 0.7 },
+      WHEEL:   { r: 0.45, density: 1.0, friction: 1.7, restitution: 0.0 },
+      HELMET:  { r: 0.20 },
+      HUBS:    { rearOffsetX: -0.75, frontOffsetX: 0.85, hubY: -0.30 },
+      MOTOR:   { maxTorque: 80.0, speedLimit: 22.0, accelRate: 10.0, brakeRate: 18.0, coastRate: 6.0 }, // rad/s cap (reduced) + rates
+      CHASSIS_TILT_TORQUE: 30.0,
+      SPRITE: {
+        path: 'assets/img/crococross-player.png',
+        widthMeters: 2.4,
+        offsetX: 0.0,
+        offsetY: -0.05,
+        clipToChassis: false,
+        show: true
+      }
+    },
+
+    // Camera
+    CAM: {
+      lookAhead: 5.0,       // meters
+      yLag: 0.08,           // 0..1
+      xLag: 0.12,
+      groundPadBottom: 10.0 // meters extra below min Y for fills
+    },
+
+    // World shifting (avoid float drift)
+    RECENTER_X: 3500.0,
+
+    // Misc
+    INVULN_TIME: 1.0,       // seconds after respawn
+    DEBUG: false
+  };
+
+  // Rider sprite asset
+  const riderImg = new Image();
+  let riderLoaded = false;
+  riderImg.onload = () => { riderLoaded = true; };
+  riderImg.src = CONFIG.BIKE.SPRITE.path;
+
+  // Decorative images
+  const treeImg = new Image(); treeImg.src = 'assets/img/crococross-tree.png';
+  const rockImg = new Image(); rockImg.src = 'assets/img/crococross-rock.png';
+  const cloudImg = new Image(); cloudImg.src = 'assets/img/crococross-cloud.png';
+
+  // Audio assets
+  const tracks = {
+    music1: new Audio('assets/audio/crococross-music-1.mp3'),
+    music2: new Audio('assets/audio/crococross-music-2.mp3')
+  };
+  tracks.music1.loop = true; tracks.music2.loop = true;
+  tracks.music1.volume = CONFIG.AUDIO.volume; tracks.music2.volume = CONFIG.AUDIO.volume;
+  const MUSIC_KEY = 'cc_music';
+  let musicMode = (localStorage.getItem(MUSIC_KEY) || CONFIG.AUDIO.default);
+  let audioUnlocked = false;
+  function updateMusicUI() {
+    if (!musicBtn) return;
+    const label = musicMode === 'music1' ? 'Music: 1' : musicMode === 'music2' ? 'Music: 2' : 'Music: Off';
+    musicBtn.textContent = label;
+  }
+  function stopAllMusic() {
+    Object.values(tracks).forEach(a => { try { a.pause(); a.currentTime = 0; } catch {} });
+  }
+  async function applyMusic() {
+    localStorage.setItem(MUSIC_KEY, musicMode);
+    updateMusicUI();
+    stopAllMusic();
+    if (musicMode === 'off') return;
+    if (!audioUnlocked) return; // wait for user gesture
+    try { await tracks[musicMode].play(); } catch {}
+  }
+  function toggleMusic() {
+    musicMode = musicMode === 'music1' ? 'music2' : musicMode === 'music2' ? 'off' : 'music1';
+    applyMusic();
+  }
+  function unlockAndPlay() {
+    if (audioUnlocked) return applyMusic();
+    audioUnlocked = true;
+    applyMusic();
+  }
+
+  // Collision categories
+  const CAT = {
+    GROUND: 0x0001,
+    BIKE:   0x0002,
+    HELMET: 0x0004
+  };
+
+  // UI elements
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let VIEW_W = window.innerWidth;
+  let VIEW_H = window.innerHeight;
+  const hudBox = document.getElementById('hudBox');
+  const hudDist = document.getElementById('hudDist');
+  const hudSpeed = document.getElementById('hudSpeed');
+  const hudLives = document.getElementById('hudLives');
+  const musicBtn = document.getElementById('musicBtn');
+
+  const menu = document.getElementById('menu');
+  const playBtn = document.getElementById('playBtn');
+  const leaderboardBtn = document.getElementById('leaderboardBtn');
+
+  const leaderboardView = document.getElementById('leaderboardView');
+  const leaderboardList = document.getElementById('leaderboardList');
+  const lbBackBtn = document.getElementById('lbBackBtn');
+
+  const gameOver = document.getElementById('gameOver');
+  const finalScoreText = document.getElementById('finalScoreText');
+  const namePrompt = document.getElementById('namePrompt');
+  const nameInput = document.getElementById('nameInput');
+  const saveScoreBtn = document.getElementById('saveScoreBtn');
+
+  // Input
+  const keys = { up: false, down: false, left: false, right: false, debug: false, pause: false };
+
+  // RNG (seeded)
+  function mulberry32(a) {
+    return function() {
+      a |= 0;
+      a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function newSeed() {
+    const arr = new Uint32Array(1);
+    crypto.getRandomValues(arr);
+    return arr[0] || 1; // avoid zero
+  }
+
+  // 1D Value noise with seeded randomness, smooth interpolation (quintic)
+  class ValueNoise1D {
+    constructor(seed) {
+      this.seed = seed | 0;
+      this.cache = new Map();
+    }
+    rint(i) {
+      if (this.cache.has(i)) return this.cache.get(i);
+      let x = (i ^ this.seed) | 0;
+      x = (x ^ 0x27d4eb2d) >>> 0;
+      x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+      const v = (x >>> 0) / 4294967295;
+      const val = v * 2 - 1; // [-1,1]
+      this.cache.set(i, val);
+      return val;
+    }
+    smoothstep(t) {
+      // 6t^5 - 15t^4 + 10t^3
+      return t * t * t * (t * (t * 6 - 15) + 10);
+    }
+    sample(x, freq) {
+      const xf = x * freq;
+      const i0 = Math.floor(xf);
+      const i1 = i0 + 1;
+      const t = xf - i0;
+      const s = this.smoothstep(t);
+      const v0 = this.rint(i0);
+      const v1 = this.rint(i1);
+      return v0 * (1 - s) + v1 * s; // [-1,1]
+    }
+  }
+
+  // Terrain generator
+  class Terrain {
+    constructor(world, seed) {
+      this.world = world;
+      this.seed = seed;
+      this.noise = new ValueNoise1D(seed ^ 0x9e3779b9);
+      this.rand = mulberry32(seed ^ 0xa5a5a5a5);
+      this.chunks = []; // {xStart, xEnd, segments: [{body, pts}], gfx: [{pts, baseY}]}
+      this.generatedToX = -CONFIG.CHUNK_LENGTH; // pre-generate one flat chunk to the left
+      this.visibleFromX = -9999;
+
+      this.checkpoints = []; // {x, y}
+      this.nextCheckpointX = CONFIG.CHECKPOINT_EVERY;
+
+      this.worldOffsetX = 0; // accumulated shift for score continuity
+      this.lastHoleEnd = -1e9;
+
+      // Seeded phases for sine-based height to guarantee visible hills
+      this.phase1 = this.rand() * Math.PI * 2;
+      this.phase2 = this.rand() * Math.PI * 2;
+      this.phase3 = this.rand() * Math.PI * 2;
+    }
+
+    difficultyAt(distance) {
+      const t = Math.min(distance / 1200, 1); // progress 0..1 over ~1.2km
+      return {
+        slopeMax: lerp(CONFIG.SLOPE_MAX_START, CONFIG.SLOPE_MAX_END, t),
+        holeProb: lerp(CONFIG.HOLE_PROB_START, CONFIG.HOLE_PROB_END, t),
+        holeWMax: lerp(CONFIG.HOLE_W_MAX_START, CONFIG.HOLE_W_MAX_END, t)
+      };
+    }
+
+    sampleHeight(x) {
+      const n = CONFIG.NOISE;
+      // Sine-based relief (deterministic with seeded phases), plus a subtle value-noise wobble
+      // Frequencies are cycles per meter -> 2π * f * x
+      const f1 = 0.02; // ~50 m period (big hills)
+      const f2 = 0.06; // ~16.7 m
+      const f3 = 0.12; // ~8.3 m
+      const ySine =
+        n.amp1 * Math.sin((2 * Math.PI * f1) * x + this.phase1) +
+        n.amp2 * Math.sin((2 * Math.PI * f2) * x + this.phase2) +
+        n.amp3 * Math.sin((2 * Math.PI * f3) * x + this.phase3);
+
+      const wobble =
+        0.25 * this.noise.sample(x + 101.3, 0.3) +
+        0.15 * this.noise.sample(x * 1.3 + 333.7, 0.55);
+
+      return n.base + ySine + wobble;
+    }
+
+    // Generate chunk starting at xStart
+    generateChunk(xStart, playerDistance) {
+      const length = CONFIG.CHUNK_LENGTH;
+      const dx = CONFIG.SAMPLE_DX;
+      const xEnd = xStart + length;
+      const pts = [];
+      let minY = Infinity;
+
+      // sample heights
+      const yFlat0 = this.sampleHeight(0);
+      for (let x = xStart; x <= xEnd + 1e-6; x += dx) {
+        let y = this.sampleHeight(x);
+        // Only flatten for x in [0, START_FLAT_UNTIL], and blend in (0..START_FLAT_UNTIL+BLEND)
+        if (x >= 0 && x <= CONFIG.START_FLAT_UNTIL) {
+          y = yFlat0; // fully flat pad at start
+        } else if (x > CONFIG.START_FLAT_UNTIL && x <= CONFIG.START_FLAT_UNTIL + CONFIG.START_BLEND_LEN) {
+          const t = (x - CONFIG.START_FLAT_UNTIL) / CONFIG.START_BLEND_LEN;
+          y = lerp(yFlat0, y, Math.max(0, Math.min(1, t))); // smooth blend to noise
+          // prevent sudden drop right after the start area
+          y = Math.max(y, yFlat0 - 0.2);
+        }
+        pts.push({ x, y });
+        if (y < minY) minY = y;
+      }
+
+      // Seam-align the start of this chunk to the previous chunk to avoid vertical steps at seams
+      if (this.chunks.length > 0) {
+        const prev = this.chunks[this.chunks.length - 1];
+        if (prev && prev.gfx && prev.gfx.length > 0) {
+          const lastPts = prev.gfx[prev.gfx.length - 1].pts;
+          if (lastPts && lastPts.length > 0) {
+            const prevLastY = lastPts[lastPts.length - 1].y;
+            const L = CONFIG.SEAM_BLEND_LEN;
+            if (pts.length > 0) {
+              // Force continuity at the seam
+              pts[0].y = prevLastY;
+              if (L > 0) {
+                for (let i = 1; i < pts.length; i++) {
+                  const dxLoc = pts[i].x - xStart;
+                  if (dxLoc > L) break;
+                  const t = Math.max(0, Math.min(1, dxLoc / L));
+                  // blend from seam y to original sampled y
+                  pts[i].y = lerp(prevLastY, pts[i].y, t);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Optionally carve a hole
+      const diff = this.difficultyAt(xStart);
+      // Enforce gentle slopes by smoothing/clamping to avoid flat fallbacks
+      this.smoothAndClamp(pts, diff.slopeMax);
+      const canHole = (xStart >= CONFIG.START_SAFE_UNTIL) && ((xStart - this.lastHoleEnd) >= CONFIG.HOLE_MIN_SPACING); // delay holes and ensure spacing
+      const makeHole = canHole && this.rand() < diff.holeProb;
+      let holes = [];
+      if (makeHole) {
+        // Determine hole width
+        const wMin = CONFIG.HOLE_W_MIN;
+        const wMax = diff.holeWMax;
+        const w = lerp(wMin, wMax, this.rand());
+
+        // Pick a hole center that leaves runup and landing within this chunk
+        const runup = CONFIG.HOLE_RUNUP_MIN;
+        const land = CONFIG.HOLE_LAND_MIN;
+        const margin = runup + land + w + 4;
+        if (length > margin) {
+          const holeStartX = lerp(xStart + runup + 2, xEnd - land - w - 2, this.rand());
+          const holeEndX = holeStartX + w;
+
+          // Validate slope around hole zone (avoid steep approach)
+          const ok = this.validateHoleZone(pts, holeStartX, holeEndX, diff.slopeMax, runup, land);
+          if (ok) {
+            // Cap hole width by a physically feasible jump range at this location
+            const tProg = Math.min(xStart / 1200, 1);
+            const safe = this.safeGapMax(pts, holeStartX, holeEndX, tProg);
+            if (safe <= CONFIG.HOLE_W_MIN * 0.95) {
+              // Too risky here; skip hole entirely
+            } else {
+              const adjEnd = holeStartX + Math.min(w, Math.max(CONFIG.HOLE_W_MIN, safe * 0.9));
+              holes.push({ start: holeStartX, end: adjEnd });
+              this.carveHole(pts, holeStartX, adjEnd, runup, land);
+              this.smoothAndClamp(pts, diff.slopeMax);
+              this.lastHoleEnd = adjEnd;
+            }
+          }
+        }
+      }
+
+      // Validate slope constraints globally (post-smoothing). If slightly over, clamp once more.
+      if (!this.validateSlope(pts, diff.slopeMax)) {
+        this.smoothAndClamp(pts, diff.slopeMax);
+      }
+
+      // Split into contiguous ground segments excluding holes
+      const segments = [];
+      if (holes.length === 0) {
+        segments.push(pts);
+      } else {
+        // carve holes
+        let cur = [];
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i];
+          if (!pointInAnyHole(p.x, holes)) {
+            cur.push(p);
+          } else {
+            if (cur.length >= 2) segments.push(cur);
+            cur = [];
+          }
+        }
+        if (cur.length >= 2) segments.push(cur);
+        // ensure segment endpoints sit at hole edges (cleaner physics)
+        // Already good enough for chain edges.
+      }
+
+      // Create physics bodies for each segment
+      const segBodies = [];
+      for (const seg of segments) {
+        if (seg.length < 2) continue;
+        const body = this.world.createBody();
+        const vertices = seg.map(p => Vec2(p.x, p.y));
+        const shape = pl.Chain(vertices, false); // open chain
+        const fix = body.createFixture(shape, {
+          friction: CONFIG.GROUND_FRICTION,
+          restitution: CONFIG.GROUND_RESTITUTION,
+          filterCategoryBits: CAT.GROUND,
+          filterMaskBits: 0xFFFF,
+        });
+        fix.setUserData({ type: 'ground' });
+        segBodies.push({ body, pts: seg });
+      }
+
+      // Gfx info (store pts and baseY)
+      const gfx = segments.map(seg => {
+        let localMin = Infinity;
+        for (const p of seg) if (p.y < localMin) localMin = p.y;
+        const baseY = Math.min(localMin - 6, CONFIG.BASELINE_Y);
+        return { pts: seg, baseY };
+      });
+
+      const chunk = {
+        xStart, xEnd, segments: segBodies, gfx, holes,
+      };
+
+      // Place checkpoints that fall within this chunk
+      this.placeCheckpointsInChunk(chunk);
+
+      this.chunks.push(chunk);
+      this.generatedToX = Math.max(this.generatedToX, xEnd);
+      return chunk;
+
+      function pointInAnyHole(x, holes) {
+        for (const h of holes) if (x >= h.start && x <= h.end) return true;
+        return false;
+      }
+    }
+
+    validateSlope(pts, slopeMax) {
+      for (let i = 1; i < pts.length; i++) {
+        const dx = pts[i].x - pts[i - 1].x;
+        const dy = pts[i].y - pts[i - 1].y;
+        if (dx <= 0) continue;
+        const slope = Math.abs(dy / dx);
+        if (slope > slopeMax) return false;
+        // also enforce max vertical step
+        if (Math.abs(dy) > 2.0) return false;
+      }
+      return true;
+    }
+
+    // Smooth and clamp sampled heights to keep slopes playable without flattening everything
+    smoothAndClamp(pts, slopeMax) {
+      if (!pts || pts.length < 2) return;
+      const dx = CONFIG.SAMPLE_DX;
+      const maxDy = slopeMax * dx;
+      const stepMax = 1.2; // hard cap per segment jump (m)
+
+      // forward pass
+      let prev = pts[0].y;
+      for (let i = 1; i < pts.length; i++) {
+        let y = pts[i].y;
+        let dy = y - prev;
+        if (dy > maxDy) y = prev + maxDy;
+        else if (dy < -maxDy) y = prev - maxDy;
+        dy = y - prev;
+        if (dy > stepMax) y = prev + stepMax;
+        if (dy < -stepMax) y = prev - stepMax;
+        // light smoothing
+        y = 0.75 * y + 0.25 * prev;
+        pts[i].y = y;
+        prev = y;
+      }
+
+      // backward pass
+      prev = pts[pts.length - 1].y;
+      for (let i = pts.length - 2; i >= 0; i--) {
+        let y = pts[i].y;
+        let dy = y - prev;
+        if (dy > maxDy) y = prev + maxDy;
+        else if (dy < -maxDy) y = prev - maxDy;
+        dy = y - prev;
+        if (dy > stepMax) y = prev + stepMax;
+        if (dy < -stepMax) y = prev - stepMax;
+        y = 0.75 * y + 0.25 * prev;
+        pts[i].y = y;
+        prev = y;
+      }
+    }
+
+    // Shape a gentle ramp before the hole and a small settle after landing
+    carveHole(pts, startX, endX, runup, land) {
+      const L = CONFIG.HOLE_RAMP_LEN;
+      const rampRaise = 0.65; // meters raise at lip
+      for (let i = 0; i < pts.length; i++) {
+        const x = pts[i].x;
+        // leading ramp: x in [startX - L, startX]
+        if (x >= startX - L && x <= startX) {
+          const t = (x - (startX - L)) / Math.max(1e-6, L); // 0..1
+          pts[i].y += t * rampRaise;
+        }
+        // landing settle: flatten a bit for first 2 meters after end
+        if (x > endX && x <= endX + 2.0) {
+          // push slightly down to avoid a spike
+          pts[i].y = Math.min(pts[i].y, pts[i - 1] ? pts[i - 1].y + 0.05 : pts[i].y);
+        }
+      }
+    }
+
+    validateHoleZone(pts, startX, endX, slopeMax, runup, land) {
+      // ensure run-up before startX and landing after endX are gentle using stricter caps
+      const runMax = Math.min(slopeMax, CONFIG.SAFE_JUMP.RUNUP_SLOPE_MAX);
+      const landMax = Math.min(slopeMax, CONFIG.SAFE_JUMP.LANDING_SLOPE_MAX);
+      const scan = (a, b, maxS) => {
+        let prev = null;
+        for (const p of pts) {
+          if (p.x < a) continue;
+          if (p.x > b) break;
+          if (prev) {
+            const dx = p.x - prev.x; if (dx <= 0) { prev = p; continue; }
+            const dy = p.y - prev.y;
+            const slope = Math.abs(dy / dx);
+            if (slope > maxS) return false;
+          }
+          prev = p;
+        }
+        return true;
+      };
+      return scan(startX - runup, startX, runMax) && scan(endX, endX + land, landMax);
+    }
+
+    // Estimate maximum safe gap width given local takeoff/landing geometry and a plausible speed
+    safeGapMax(pts, startX, endX, tProg) {
+      const SJ = CONFIG.SAFE_JUMP;
+      const g = CONFIG.GRAVITY;
+
+      const yAt = (x) => {
+        // linear interp in pts (monotonic in x)
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i];
+          if (x >= a.x && x <= b.x) {
+            const t = (x - a.x) / Math.max(1e-6, (b.x - a.x));
+            return a.y + (b.y - a.y) * t;
+          }
+        }
+        // out of range: clamp to ends
+        if (x < pts[0].x) return pts[0].y;
+        return pts[pts.length - 1].y;
+      };
+
+      // Estimate takeoff angle using slope over a short window before the lip
+      const win = 3.0; // meters
+      const y0 = yAt(Math.max(startX - win, pts[0].x));
+      const y1 = yAt(startX);
+      const slope = (y1 - y0) / Math.max(1e-6, (startX - Math.max(startX - win, pts[0].x)));
+      let theta = Math.atan(slope);
+      theta = Math.max(SJ.MIN_TAKEOFF_ANGLE, Math.min(SJ.MAX_TAKEOFF_ANGLE, theta));
+
+      // Check run-up and landing slopes with stricter bounds
+      const runOk = this.validateHoleZone(pts, startX, endX, Number.POSITIVE_INFINITY, 8.0, 0.0);
+      const landOk = this.validateHoleZone(pts, startX, endX, Number.POSITIVE_INFINITY, 0.0, 8.0);
+      if (!runOk || !landOk) return 0;
+
+      // Landing height just after the gap
+      const yLanding = yAt(endX + 0.5);
+      const drop = Math.max(0, y1 - yLanding); // positive if landing lower
+
+      // Plausible speed progression
+      const v = (SJ.JUMP_SPEED_START * (1 - tProg)) + (SJ.JUMP_SPEED_END * tProg);
+      const vx = v * Math.cos(theta);
+      const vy = v * Math.sin(theta);
+
+      // Time of flight considering vertical offset between takeoff and landing
+      let tFlight = 0;
+      if (drop >= 0) {
+        tFlight = (vy + Math.sqrt(vy * vy + 2 * g * drop)) / g;
+      } else {
+        const h = -drop; // landing higher
+        const disc = vy * vy - 2 * g * h;
+        if (disc <= 0) return 0;
+        tFlight = (vy - Math.sqrt(disc)) / g;
+        if (tFlight <= 0) return 0;
+      }
+      const range = Math.max(0, vx * tFlight);
+      return Math.max(0, range - SJ.SAFETY_MARGIN);
+    }
+
+    placeCheckpointsInChunk(chunk) {
+      while (this.nextCheckpointX <= chunk.xEnd) {
+        if (this.nextCheckpointX >= chunk.xStart) {
+          const pos = this.findSafePointNearX(chunk, this.nextCheckpointX);
+          if (pos) {
+            this.checkpoints.push(pos);
+          } else {
+            // fallback to direct height (if in a hole, nudge slightly right)
+            const x = this.nextCheckpointX + 1.5;
+            const y = this.sampleHeight(x) + 0.3;
+            this.checkpoints.push({ x, y });
+          }
+        }
+        this.nextCheckpointX += CONFIG.CHECKPOINT_EVERY;
+      }
+    }
+
+    findSafePointNearX(chunk, x) {
+      // Find a checkpoint point near x that is not inside a hole, not on a lip,
+      // and has at least CP_SAFE_FORWARD meters of solid ground ahead.
+      const holes = chunk.holes || [];
+      const CPF = CONFIG.CP_SAFE_FORWARD;
+      const LIP = CONFIG.CP_LIP_MARGIN;
+      const R = CONFIG.CP_SEARCH_RADIUS;
+      const STEP = CONFIG.CP_STEP;
+
+      const yAt = (xp) => {
+        // linear interpolate along gfx points
+        for (const g of chunk.gfx) {
+          const pts = g.pts;
+          for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1], b = pts[i];
+            if (xp >= a.x && xp <= b.x) {
+              const t = (xp - a.x) / Math.max(1e-6, (b.x - a.x));
+              return a.y + (b.y - a.y) * t;
+            }
+          }
+        }
+        // fallback to nearest point in this chunk
+        let best = null, bestDx = 1e9;
+        for (const g of chunk.gfx) {
+          for (const p of g.pts) {
+            const d = Math.abs(p.x - xp);
+            if (d < bestDx) { bestDx = d; best = p; }
+          }
+        }
+        return best ? best.y : this.sampleHeight(xp);
+      };
+
+      const isInHole = (xp) => {
+        for (const h of holes) if (xp >= h.start && xp <= h.end) return true;
+        return false;
+      };
+      const nearLip = (xp) => {
+        for (const h of holes) if (Math.abs(xp - h.start) <= LIP) return true;
+        return false;
+      };
+      const forwardSolidLen = (xp) => {
+        let nextStart = Infinity;
+        for (const h of holes) {
+          if (h.start >= xp && h.start < nextStart) nextStart = h.start;
+        }
+        const toEnd = chunk.xEnd - xp;
+        const toHole = (nextStart === Infinity) ? Infinity : (nextStart - xp);
+        return Math.max(0, Math.min(toEnd, toHole));
+      };
+
+      const tryX = (xp) => {
+        if (xp < chunk.xStart + 0.5 || xp > chunk.xEnd - 0.5) return null;
+        if (isInHole(xp) || nearLip(xp)) return null;
+        if (forwardSolidLen(xp) < CPF) return null;
+        return { x: xp, y: yAt(xp) + 0.3 };
+      };
+
+      // Search left first (safer), then right
+      for (let d = 0; d <= R + 1e-6; d += STEP) {
+        const left = tryX(x - d);
+        if (left) return left;
+        if (d > 0) {
+          const right = tryX(x + d);
+          if (right) return right;
+        }
+      }
+      // Fallback to nearest ground
+      const y = yAt(x);
+      return { x, y: y + 0.3 };
+    }
+
+    ensureAhead(targetX, playerDistance) {
+      while (this.generatedToX < targetX) {
+        // Attempt regeneration until non-null
+        let tries = 0, chunk = null;
+        do {
+          chunk = this.generateChunk(this.generatedToX, playerDistance);
+          tries++;
+          if (tries > 8 && !chunk) break; // avoid infinite loop
+        } while (!chunk);
+        if (!chunk) {
+          // fallback: flat chunk
+          const flat = [];
+          const dx = CONFIG.SAMPLE_DX;
+          const xStart = this.generatedToX;
+          const xEnd = xStart + CONFIG.CHUNK_LENGTH;
+          for (let x = xStart; x <= xEnd + 1e-6; x += dx) flat.push({ x, y: -2.0 });
+          // Create physics
+          const body = this.world.createBody();
+          const vertices = flat.map(p => Vec2(p.x, p.y));
+          const shape = pl.Chain(vertices, false);
+          const fix = body.createFixture(shape, {
+            friction: CONFIG.GROUND_FRICTION,
+            restitution: CONFIG.GROUND_RESTITUTION,
+            filterCategoryBits: CAT.GROUND,
+            filterMaskBits: 0xFFFF
+          });
+          fix.setUserData({ type: 'ground' });
+          const baseY = -6;
+          const chunkFallback = {
+            xStart, xEnd, segments: [{ body, pts: flat }], gfx: [{ pts: flat, baseY }], holes: []
+          };
+          this.chunks.push(chunkFallback);
+          this.placeCheckpointsInChunk(chunkFallback);
+          this.generatedToX = xEnd;
+        }
+      }
+    }
+
+    cullBehind(minXToKeep, protectXOpt) {
+      // keep also the chunk that contains the last PASSED checkpoint (if provided)
+      const protectX = (typeof protectXOpt === 'number') ? (protectXOpt - 2) : -9999;
+
+      for (let i = 0; i < this.chunks.length; i++) {
+        const ch = this.chunks[i];
+        const keep = (ch.xEnd >= minXToKeep) || (protectX >= ch.xStart && protectX <= ch.xEnd);
+        if (!keep) {
+          // destroy bodies
+          for (const s of ch.segments) {
+            this.world.destroyBody(s.body);
+          }
+          this.chunks.splice(i, 1);
+          i--;
+        }
+      }
+    }
+
+    lastCheckpoint() {
+      return this.checkpoints.length ? this.checkpoints[this.checkpoints.length - 1] : null;
+    }
+
+    shiftWorldIfNeeded(bikeX, onShift) {
+      if (bikeX > CONFIG.RECENTER_X) {
+        const shift = -bikeX + 10; // bring near origin
+        const v = Vec2(shift, 0);
+        this.world.shiftOrigin(v); // Planck API: translate all bodies
+        // Update stored coordinates
+        for (const ch of this.chunks) {
+          ch.xStart += shift;
+          ch.xEnd += shift;
+          for (const s of ch.segments) {
+            for (const p of s.pts) { p.x += shift; }
+          }
+          for (const g of ch.gfx) {
+            for (const p of g.pts) { p.x += shift; }
+          }
+          for (const h of (ch.holes || [])) { h.start += shift; h.end += shift; }
+        }
+        for (const cp of this.checkpoints) { cp.x += shift; }
+        this.generatedToX += shift;
+        this.visibleFromX += shift;
+        this.worldOffsetX -= shift; // accumulate for score continuity
+        onShift && onShift(shift);
+      }
+    }
+
+    // Ensure per-chunk decorations exist (deterministic, no physics)
+    ensureDecorations(chunk) {
+      if (chunk.decor) return;
+      const holes = chunk.holes || [];
+      const inHole = (x) => {
+        for (const h of holes) if (x >= h.start && x <= h.end) return true;
+        return false;
+      };
+      const yAt = (xp) => {
+        for (const g of chunk.gfx) {
+          const pts = g.pts;
+          for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1], b = pts[i];
+            if (xp >= a.x && xp <= b.x) {
+              const t = (xp - a.x) / Math.max(1e-6, (b.x - a.x));
+              return a.y + (b.y - a.y) * t;
+            }
+          }
+        }
+        return this.sampleHeight(xp);
+      };
+      const dec = [];
+      const pushIfOk = (type, x, sMin, sMax, yOffset, rng) => {
+        if (x <= chunk.xStart + 1 || x >= chunk.xEnd - 1) return;
+        if (inHole(x)) return;
+        for (const d of dec) if (Math.abs(d.x - x) < CONFIG.DECOR.minSpacing) return;
+        const s = sMin + rng() * (sMax - sMin);
+        const y = yAt(x) + yOffset;
+        dec.push({ type, x, y, s, flip: rng() < 0.5 });
+      };
+      // Local deterministic RNG based on world seed and chunk start
+      const seedMix = (this.seed ^ (Math.floor(chunk.xStart * 9973) | 0)) >>> 0;
+      const rng = mulberry32(seedMix || 1);
+      // Trees
+      const tCount = Math.max(0, Math.round(CONFIG.DECOR.treePerChunk + (rng() - 0.5)));
+      for (let i = 0; i < tCount; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, 0.08, rng);
+      }
+      // Rocks
+      const rCount = Math.max(0, Math.round(CONFIG.DECOR.rockPerChunk + (rng() - 0.5)));
+      for (let i = 0; i < rCount; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, 0.04, rng);
+      }
+      chunk.decor = dec;
+    }
+
+    draw(camera) {
+      const scale = CONFIG.SCALE;
+      // Ground fill + stroke
+      ctx.lineWidth = CONFIG.GROUND_THICK;
+      ctx.strokeStyle = '#2e8b57'; // grass outline
+      ctx.fillStyle = '#7cd37b';   // grass fill top
+
+      for (const ch of this.chunks) {
+        for (const g of ch.gfx) {
+          const pts = g.pts;
+          if (pts.length < 2) continue;
+
+          // Build path
+          ctx.beginPath();
+          // top contour
+          for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const sx = worldToScreenX(p.x, camera.x);
+            const sy = worldToScreenY(p.y, camera.y);
+            if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+          }
+          // Close polygon to base
+          const last = pts[pts.length - 1];
+          const first = pts[0];
+          const baseW = Math.max(g.baseY, getChunkBaseY(pts) - CONFIG.CAM.groundPadBottom);
+          const sxb = worldToScreenX(last.x, camera.x);
+          const syb = worldToScreenY(baseW, camera.y);
+          ctx.lineTo(sxb, syb);
+          const sxf = worldToScreenX(first.x, camera.x);
+          ctx.lineTo(sxf, syb);
+          ctx.closePath();
+
+          // Fill soil below grass with two-tone
+          ctx.fillStyle = '#9b6f3a'; // soil
+          ctx.fill();
+          // Grass top strip
+          ctx.save();
+          ctx.clip();
+          ctx.beginPath();
+          // small strip above path
+          for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const sx = worldToScreenX(p.x, camera.x);
+            const sy = worldToScreenY(p.y + 0.05, camera.y);
+            if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+          }
+          ctx.lineTo(sxb, syb);
+          ctx.lineTo(sxf, syb);
+          ctx.closePath();
+          ctx.fillStyle = '#6fd97a';
+          ctx.fill();
+          ctx.restore();
+
+          // Decorations draw (trees/rocks) before outline
+          this.ensureDecorations(ch);
+          if (ch.decor && ch.decor.length) {
+            for (const d of ch.decor) {
+              const img = d.type === 'tree' ? treeImg : rockImg;
+              if (!img.complete) continue;
+              const sx = worldToScreenX(d.x, camera.x);
+              const sy = worldToScreenY(d.y, camera.y);
+              const baseWm = d.type === 'tree' ? 2.0 : 1.2;
+              const w = baseWm * scale * d.s;
+              const h = w * (img.height / Math.max(1, img.width));
+              ctx.save();
+              ctx.translate(sx, sy);
+              ctx.scale(d.flip ? -1 : 1, 1);
+              ctx.drawImage(img, -w * 0.5, -h, w, h);
+              ctx.restore();
+            }
+          }
+
+          // Outline
+          ctx.beginPath();
+          for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const sx = worldToScreenX(p.x, camera.x);
+            const sy = worldToScreenY(p.y, camera.y);
+            if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+          }
+          ctx.stroke();
+        }
+      }
+
+      // Checkpoint flags
+      for (const cp of this.checkpoints) {
+        const sx = worldToScreenX(cp.x, camera.x);
+        const sy = worldToScreenY(cp.y, camera.y);
+        drawFlag(sx, sy);
+      }
+
+      // Debug draw
+      if (CONFIG.DEBUG) {
+        ctx.fillStyle = '#000';
+        ctx.font = '10px monospace';
+        for (const ch of this.chunks) {
+          for (const g of ch.gfx) {
+            for (let i = 1; i < g.pts.length; i++) {
+              const a = g.pts[i - 1], b = g.pts[i];
+              const dx = b.x - a.x, dy = b.y - a.y;
+              const slope = (dy / dx);
+              const sx = worldToScreenX((a.x + b.x) * 0.5, camera.x);
+              const sy = worldToScreenY((a.y + b.y) * 0.5 + 0.5, camera.y);
+              ctx.fillText(slope.toFixed(2), sx, sy);
+            }
+          }
+        }
+      }
+
+      function getChunkBaseY(pts) {
+        let minY = Infinity;
+        for (const p of pts) if (p.y < minY) minY = p.y;
+        return minY - 4;
+      }
+      function worldToScreenX(x, camX) {
+        return Math.round(VIEW_W * 0.5 + (x - camX) * scale);
+      }
+      function worldToScreenY(y, camY) {
+        return Math.round(VIEW_H * 0.5 - (y - camY) * scale);
+      }
+      function worldToScreenX(x, camX) {
+        return Math.round(VIEW_W * 0.5 + (x - camX) * scale);
+      }
+      function worldToScreenY(y, camY) {
+        return Math.round(VIEW_H * 0.5 - (y - camY) * scale);
+      }
+      function drawFlag(sx, sy) {
+        ctx.save();
+        // pole
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx, sy - 40);
+        ctx.stroke();
+        // flag
+        ctx.fillStyle = '#ff3b3b';
+        ctx.beginPath();
+        ctx.moveTo(sx, sy - 40);
+        ctx.lineTo(sx + 24, sy - 32);
+        ctx.lineTo(sx, sy - 24);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+
+  // Bike model
+  class Bike {
+    constructor(world, spawnPos) {
+      this.world = world;
+      this.dead = false;
+      this.invulnTimer = 0;
+
+      const p = spawnPos || { x: 0, y: 0 };
+      const B = CONFIG.BIKE;
+
+      // Chassis
+      const ch = world.createDynamicBody({
+        position: Vec2(p.x, p.y + 0.6),
+        angularDamping: B.CHASSIS.angularDamping,
+      });
+      ch.setBullet(true);
+      const chassisShape = pl.Box(B.CHASSIS.w * 0.5, B.CHASSIS.h * 0.5);
+      const cfix = ch.createFixture({
+        shape: chassisShape,
+        density: B.CHASSIS.density,
+        friction: B.CHASSIS.friction,
+        filterCategoryBits: CAT.BIKE,
+        filterMaskBits: 0xFFFF ^ CAT.HELMET
+      });
+      cfix.setUserData({ type: 'chassis' });
+
+      // Wheels
+      const rw = world.createDynamicBody(Vec2(p.x + B.HUBS.rearOffsetX, p.y + B.HUBS.hubY));
+      const fw = world.createDynamicBody(Vec2(p.x + B.HUBS.frontOffsetX, p.y + B.HUBS.hubY));
+      rw.setBullet(true);
+      fw.setBullet(true);
+      const wheelShape = pl.Circle(B.WHEEL.r);
+      const rwFix = rw.createFixture({ shape: wheelShape, density: B.WHEEL.density, friction: B.WHEEL.friction, restitution: B.WHEEL.restitution, filterCategoryBits: CAT.BIKE });
+      const fwFix = fw.createFixture({ shape: wheelShape, density: B.WHEEL.density, friction: B.WHEEL.friction, restitution: B.WHEEL.restitution, filterCategoryBits: CAT.BIKE });
+      rwFix.setUserData({ type: 'wheel', which: 'rear' });
+      fwFix.setUserData({ type: 'wheel', which: 'front' });
+
+      // Helmet (sensor)
+      const helmet = world.createDynamicBody({
+        position: Vec2(p.x, p.y + 0.6 + (B.CHASSIS.h * 0.5) + B.HELMET.r + 0.05),
+        fixedRotation: false,
+      });
+      helmet.createFixture({
+        shape: pl.Circle(B.HELMET.r),
+        isSensor: true,
+        density: 0.01,
+        filterCategoryBits: CAT.HELMET,
+        filterMaskBits: 0xFFFF
+      }).setUserData({ type: 'helmet' });
+
+      // Joints
+      const rearJoint = world.createJoint(pl.RevoluteJoint({
+        enableMotor: true,
+        maxMotorTorque: CONFIG.BIKE.MOTOR.maxTorque,
+        motorSpeed: 0
+      }, ch, rw, rw.getPosition()));
+
+      const frontJoint = world.createJoint(pl.RevoluteJoint({
+        enableMotor: true,
+        maxMotorTorque: CONFIG.BIKE.MOTOR.maxTorque,
+        motorSpeed: 0
+      }, ch, fw, fw.getPosition()));
+
+      this.chassis = ch;
+      this.rear = rw;
+      this.front = fw;
+      this.helmet = helmet;
+      this.rearJoint = rearJoint;
+      this.frontJoint = frontJoint;
+
+      // Collision logic: helmet or chassis touching ground => crash
+      const self = this;
+      world.on('begin-contact', function(c) {
+        const a = c.getFixtureA().getUserData();
+        const b = c.getFixtureB().getUserData();
+        if (!a || !b) return;
+        if (self.invulnTimer > 0) return;
+
+        const types = [a.type, b.type];
+        if ((types.includes('helmet') && types.includes('ground')) ||
+            (types.includes('chassis') && types.includes('ground'))) {
+          self.dead = true;
+        }
+      });
+    }
+
+    setMotorSpeed(speed) {
+      const limit = CONFIG.BIKE.MOTOR.speedLimit;
+      const clamped = Math.max(-limit, Math.min(limit, speed));
+      this.rearJoint.setMotorSpeed(clamped);
+      this.frontJoint.setMotorSpeed(clamped);
+    }
+
+    applyTiltTorque(dir, airborne) {
+      // dir: -1 or +1
+      const k = airborne ? 1.0 : 0.5; // less torque when grounded
+      const torque = CONFIG.BIKE.CHASSIS_TILT_TORQUE * dir * k;
+      this.chassis.applyTorque(torque, true);
+    }
+
+    getPos() {
+      return this.chassis.getPosition();
+    }
+
+    getVel() {
+      return this.chassis.getLinearVelocity();
+    }
+
+    isAirborne() {
+      // heuristic: both wheels in air (low normal force). Approx by contact count
+      // Simpler: check y difference vs ground height not available, fallback to velocity.y and body contact list complexity.
+      // We'll use a simple heuristic: if either wheel's contact list is null -> airborne-ish
+      const hasRearContacts = !!this.rear.m_contactList;
+      const hasFrontContacts = !!this.front.m_contactList;
+      return !(hasRearContacts || hasFrontContacts);
+    }
+
+    destroy() {
+      this.world.destroyBody(this.rear);
+      this.world.destroyBody(this.front);
+      this.world.destroyBody(this.helmet);
+      this.world.destroyBody(this.chassis);
+    }
+
+    draw(camera) {
+      const scale = CONFIG.SCALE;
+
+      // Rider sprite (anchored to chassis)
+      if (CONFIG.BIKE.SPRITE.show && riderLoaded) {
+        const p = this.chassis.getPosition();
+        const angle = this.chassis.getAngle();
+        const sx = worldToScreenX(p.x, camera.x);
+        const sy = worldToScreenY(p.y, camera.y);
+        const spr = CONFIG.BIKE.SPRITE;
+        const wpx = spr.widthMeters * scale;
+        const ratio = (riderImg.width > 0) ? (riderImg.height / riderImg.width) : 1;
+        const hpx = wpx * ratio;
+        const ox = spr.offsetX * scale;
+        const oy = spr.offsetY * scale;
+
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(-angle);
+        if (spr.clipToChassis) {
+          const hw = CONFIG.BIKE.CHASSIS.w * 0.5 * scale;
+          const hh = CONFIG.BIKE.CHASSIS.h * 0.5 * scale;
+          ctx.beginPath();
+          ctx.rect(-hw, -hh, hw * 2, hh * 2);
+          ctx.clip();
+        }
+        ctx.drawImage(riderImg, -wpx * 0.5 + ox, -hpx * 0.5 + oy, wpx, hpx);
+        ctx.restore();
+      }
+
+      // Wheels (draw in front of sprite)
+      drawCircleBody(this.rear, '#2b2b2b', '#1a1a1a');
+      drawCircleBody(this.front, '#2b2b2b', '#1a1a1a');
+
+      // Chassis (hide when sprite is shown unless debugging)
+      if (CONFIG.DEBUG || !riderLoaded || !CONFIG.BIKE.SPRITE.show) {
+        drawRectBody(this.chassis, CONFIG.BIKE.CHASSIS.w, CONFIG.BIKE.CHASSIS.h, '#2b6cb0', '#0a3d78');
+      }
+
+      // Helmet (sensor) visible only in debug
+      if (CONFIG.DEBUG) {
+        drawCircleBody(this.helmet, '#ff4d4d', '#b31515');
+      }
+
+      // Link lines (debug style)
+      if (CONFIG.DEBUG) {
+        drawLink(this.chassis, this.rear);
+        drawLink(this.chassis, this.front);
+      }
+
+      // Helper draws
+      function drawCircleBody(body, fill, stroke) {
+        const p = body.getPosition();
+        const angle = body.getAngle();
+        const sx = worldToScreenX(p.x, camera.x);
+        const sy = worldToScreenY(p.y, camera.y);
+        let r = 0.45;
+        // read first fixture radius if available
+        const f = body.getFixtureList();
+        if (f && f.getShape() && f.getShape().m_radius) {
+          r = f.getShape().m_radius;
+        }
+        const rp = r * scale;
+
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(-angle);
+        ctx.beginPath();
+        ctx.arc(0, 0, rp, 0, Math.PI * 2);
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = stroke;
+        ctx.stroke();
+        // spokes
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 6; i++) {
+          const a = (Math.PI * 2 * i) / 6;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(Math.cos(a) * rp, Math.sin(a) * rp);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      function drawRectBody(body, w, h, fill, stroke) {
+        const p = body.getPosition();
+        const angle = body.getAngle();
+        const sx = worldToScreenX(p.x, camera.x);
+        const sy = worldToScreenY(p.y, camera.y);
+        const hw = w * 0.5 * scale;
+        const hh = h * 0.5 * scale;
+
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(-angle);
+        ctx.fillStyle = fill;
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.rect(-hw, -hh, hw * 2, hh * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function drawLink(a, b) {
+        const pa = a.getPosition();
+        const pb = b.getPosition();
+        const sx1 = worldToScreenX(pa.x, camera.x);
+        const sy1 = worldToScreenY(pa.y, camera.y);
+        const sx2 = worldToScreenX(pb.x, camera.x);
+        const sy2 = worldToScreenY(pb.y, camera.y);
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(sx1, sy1);
+        ctx.lineTo(sx2, sy2);
+        ctx.stroke();
+      }
+
+      function worldToScreenX(x, camX) {
+        return Math.round(VIEW_W * 0.5 + (x - camX) * scale);
+      }
+      function worldToScreenY(y, camY) {
+        return Math.round(VIEW_H * 0.5 - (y - camY) * scale);
+      }
+    }
+  }
+
+  // Utility: linear interpolation
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function approach(current, target, maxDelta) {
+    if (current < target) return Math.min(target, current + maxDelta);
+    return Math.max(target, current - maxDelta);
+  }
+
+  // Leaderboard (localStorage)
+  const LB_KEY = 'moto2d_leaderboard';
+  function loadLB() {
+    try {
+      const raw = localStorage.getItem(LB_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr;
+      return [];
+    } catch { return []; }
+  }
+  function saveLB(list) {
+    try {
+      localStorage.setItem(LB_KEY, JSON.stringify(list.slice(0, 10)));
+    } catch {}
+  }
+  function addScore(name, score) {
+    const list = loadLB();
+    list.push({ name, score, date: new Date().toISOString().slice(0,10) });
+    list.sort((a, b) => b.score - a.score);
+    saveLB(list);
+  }
+  function renderLeaderboard() {
+    const list = loadLB();
+    leaderboardList.innerHTML = '';
+    const header = document.createElement('div');
+    header.className = 'lb-row header';
+    header.innerHTML = '<div>Name</div><div>Score</div><div>Date</div>';
+    leaderboardList.appendChild(header);
+    list.forEach((row, idx) => {
+      const div = document.createElement('div');
+      div.className = 'lb-row';
+      div.innerHTML = `<div>${idx + 1}. ${esc(row.name)}</div><div>${Math.floor(row.score)}</div><div>${row.date}</div>`;
+      leaderboardList.appendChild(div);
+    });
+    if (list.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'center small';
+      empty.style.padding = '12px 0';
+      empty.textContent = 'No scores yet. Play a round!';
+      leaderboardList.appendChild(empty);
+    }
+  }
+  function esc(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({'&':'&','<':'<','>':'>','"':'"'}[c] || c));
+  }
+
+  // Game State
+  const STATE = {
+    MENU: 'menu',
+    PLAYING: 'playing',
+    PAUSED: 'paused',
+    GAMEOVER: 'gameover',
+    LEADERBOARD: 'leaderboard'
+  };
+
+  let world = null;
+  let terrain = null;
+  let bike = null;
+  let state = STATE.MENU;
+  let seed = newSeed();
+
+  let accumulator = 0;
+  const fixedDt = 1 / CONFIG.FIXED_HZ;
+  let lastTs = performance.now();
+
+  // Scoring & lives & checkpoints
+  let lives = CONFIG.MAX_LIVES;
+  let maxXReached = 0; // meters (worldOffset adjusted)
+  let invulnLeft = 0;
+  let currentCheckpoint = { x: 0, y: 0 };
+  let camera = { x: 0, y: 0 };
+  let motorTarget = 0;
+
+  // Image clouds (deterministic)
+  const clouds = [];
+  function initClouds(seedVal = seed) {
+    clouds.length = 0;
+    const rng = mulberry32((seedVal ^ 0x1234abcd) >>> 0);
+    const N = CONFIG.CLOUDS.count;
+    for (let i = 0; i < N; i++) {
+      clouds.push({
+        x: rng() * 300,                              // world-offset x basis
+        y: 16 + rng() * 10,                          // world height band
+        s: CONFIG.CLOUDS.scaleMin + rng() * (CONFIG.CLOUDS.scaleMax - CONFIG.CLOUDS.scaleMin)
+      });
+    }
+  }
+
+  function resetWorld(newRunSeed) {
+    seed = newRunSeed || newSeed();
+    world = new pl.World({ gravity: Vec2(0, -CONFIG.GRAVITY) });
+    terrain = new Terrain(world, seed);
+    lives = CONFIG.MAX_LIVES;
+    maxXReached = 0;
+    invulnLeft = 0;
+    currentCheckpoint = { x: 0, y: 0 };
+    camera = { x: 0, y: 0 };
+    accumulator = 0;
+    lastTs = performance.now();
+    initClouds();
+
+    // Initial flat ground to start (spawn a bit to the right of origin)
+    terrain.ensureAhead(200, 0);
+    const spawnX = 5;
+    // Prefer exact ground from generated chunk (post-smoothing), fallback to sampled noise
+    let spawnChunk = null;
+    for (const ch of terrain.chunks) {
+      if (spawnX >= ch.xStart && spawnX <= ch.xEnd) { spawnChunk = ch; break; }
+    }
+    let cp = null;
+    if (spawnChunk) {
+      cp = terrain.findSafePointNearX(spawnChunk, spawnX); // returns slight +0.3m offset
+    }
+    if (!cp) {
+      cp = { x: spawnX, y: terrain.sampleHeight(spawnX) + 0.3 };
+    }
+    currentCheckpoint = cp;
+    // spawn bike with the same vertical offset as respawn to avoid intersecting ground
+    bike = new Bike(world, { x: currentCheckpoint.x, y: currentCheckpoint.y + 0.6 });
+    motorTarget = 0;
+    bike.invulnTimer = CONFIG.INVULN_TIME;
+
+    // Pre-generate some chunks ahead
+    terrain.ensureAhead(terrain.generatedToX + 300, 0);
+  }
+
+  // Input handling
+  window.addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    switch (e.key) {
+      case 'ArrowUp': keys.up = true; break;
+      case 'ArrowDown': keys.down = true; break;
+      case 'ArrowLeft': keys.left = true; break;
+      case 'ArrowRight': keys.right = true; break;
+      case 'd': case 'D':
+        CONFIG.DEBUG = !CONFIG.DEBUG; break;
+      case 'Escape':
+        if (state === STATE.PLAYING) {
+          setState(STATE.PAUSED);
+        } else if (state === STATE.PAUSED) {
+          setState(STATE.PLAYING);
+        }
+        break;
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    switch (e.key) {
+      case 'ArrowUp': keys.up = false; break;
+      case 'ArrowDown': keys.down = false; break;
+      case 'ArrowLeft': keys.left = false; break;
+      case 'ArrowRight': keys.right = false; break;
+    }
+  });
+
+  // UI handlers
+  playBtn.onclick = () => { unlockAndPlay(); startNewGame(); };
+  leaderboardBtn.onclick = () => { showLeaderboard(); };
+  lbBackBtn.onclick = () => { setState(STATE.MENU); };
+  saveScoreBtn.onclick = () => { submitScoreAndHide(); };
+  if (musicBtn) { updateMusicUI(); musicBtn.onclick = () => { unlockAndPlay(); toggleMusic(); }; }
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      submitScoreAndHide();
+    }
+  });
+  nameInput.addEventListener('input', () => {
+    let v = nameInput.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 3);
+    if (nameInput.value !== v) nameInput.value = v;
+    saveScoreBtn.disabled = v.length === 0;
+  });
+
+  function startNewGame() {
+    resetWorld(newSeed());
+    setState(STATE.PLAYING);
+  }
+
+  function showLeaderboard() {
+    renderLeaderboard();
+    setState(STATE.LEADERBOARD);
+  }
+
+  function setState(s) {
+    state = s;
+    menu.classList.toggle('hidden', s !== STATE.MENU);
+    leaderboardView.classList.toggle('hidden', s !== STATE.LEADERBOARD);
+    gameOver.classList.toggle('hidden', s !== STATE.GAMEOVER);
+
+    if (s === STATE.PLAYING || s === STATE.PAUSED) {
+      hudBox.style.display = '';
+    } else {
+      hudBox.style.display = 'none';
+    }
+    if (s === STATE.GAMEOVER) {
+      // Do not auto-hide the name prompt here; onCrash() controls its visibility.
+      // Just sync the Save button enabled state with current input.
+      const v = (nameInput.value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 3);
+      saveScoreBtn.disabled = v.length === 0;
+    }
+  }
+
+  // Game loop
+  function loop(ts) {
+    requestAnimationFrame(loop);
+    const dt = Math.min((ts - lastTs) / 1000, 0.1);
+    lastTs = ts;
+
+    // Clear canvas
+    resizeCanvasToDisplaySize();
+
+    drawBackground();
+
+    switch (state) {
+      case STATE.MENU:
+      case STATE.LEADERBOARD:
+      case STATE.GAMEOVER:
+        // idle
+        break;
+      case STATE.PAUSED:
+        // draw paused overlay on top of last frame: handled by overlays
+        break;
+      case STATE.PLAYING:
+        update(dt);
+        render();
+        break;
+    }
+  }
+
+  function update(dt) {
+    if (!world || !bike) return;
+
+    accumulator += dt;
+    const steps = Math.min(5, Math.floor(accumulator / fixedDt));
+    for (let i = 0; i < steps; i++) {
+      fixedUpdate(fixedDt);
+      accumulator -= fixedDt;
+    }
+    // Render at end
+  }
+
+  function fixedUpdate(dt) {
+    // Progressive controls (→ accelerate, ← brake/reverse; in air keys tilt)
+    const airborne = bike.isAirborne();
+    const dirFwd = -1; // negative motor speed drives right with current joint orientation
+    const M = CONFIG.BIKE.MOTOR;
+
+    if (airborne) {
+      // Hold motor; tilt only (invert mapping to keep behavior consistent when leaving ground)
+      if (keys.left) bike.applyTiltTorque(-1, true);   // tilt back
+      if (keys.right) bike.applyTiltTorque(+1, true);  // tilt forward
+    } else {
+      if (keys.right) {
+        // accelerate progressively toward forward cap
+        motorTarget = approach(motorTarget, dirFwd * M.speedLimit, M.accelRate * dt);
+      } else if (keys.left) {
+        // braking: move toward 0 quickly, then reverse if held
+        if (Math.sign(motorTarget) === dirFwd || motorTarget === 0) {
+          motorTarget = approach(motorTarget, 0, M.brakeRate * dt);
+        } else {
+          motorTarget = approach(motorTarget, -dirFwd * M.speedLimit, M.accelRate * dt);
+        }
+      } else {
+        // coasting decays toward 0 gently
+        motorTarget = approach(motorTarget, 0, M.coastRate * dt);
+      }
+    }
+
+    bike.setMotorSpeed(motorTarget);
+
+    // Step physics
+    world.step(dt, 8, 3);
+
+    // Distance/score progression
+    const pos = bike.getPos();
+    const absoluteX = terrain.worldOffsetX + pos.x;
+    if (absoluteX > maxXReached) maxXReached = absoluteX;
+
+    // Generate terrain ahead
+    const viewAhead = 120; // meters ahead to ensure
+    terrain.ensureAhead(pos.x + viewAhead, maxXReached);
+
+    // Cull behind
+    terrain.cullBehind(pos.x - 120, currentCheckpoint.x);
+
+    // World recentering
+    terrain.shiftWorldIfNeeded(pos.x, (shift) => {
+      // nothing extra needed; worldOffsetX updated
+    });
+
+    // Camera follow
+    const camTargetX = pos.x + CONFIG.CAM.lookAhead;
+    const camTargetY = lerp(camera.y, pos.y, CONFIG.CAM.yLag);
+    camera.x = lerp(camera.x, camTargetX, CONFIG.CAM.xLag);
+    camera.y = camTargetY;
+
+    // Crash detection (helmet handled by contact)
+    if (bike.dead) {
+      onCrash();
+      return;
+    }
+
+    // Fall into abyss
+    if (pos.y < -60) {
+      onCrash();
+      return;
+    }
+
+    // Checkpoint update: ensure currentCheckpoint is the last one <= bike absolute x
+    const absX = terrain.worldOffsetX + pos.x;
+    while (terrain.checkpoints.length && (terrain.checkpoints[0].x + terrain.worldOffsetX) <= (absX - 1e6)) {
+      // unlikely, but keep consistent
+      terrain.checkpoints.shift();
+    }
+    // last passed checkpoint (x <= bike x)
+    let passed = currentCheckpoint;
+    for (let i = 0; i < terrain.checkpoints.length; i++) {
+      const cp = terrain.checkpoints[i];
+      if (cp.x <= pos.x) passed = cp; else break;
+    }
+    currentCheckpoint = passed;
+
+    // HUD
+    hudDist.textContent = `${Math.floor(maxXReached)} m`;
+    const v = bike.getVel();
+    const speedKmh = Math.max(0, Math.round(Math.hypot(v.x, v.y) * 3.6));
+    hudSpeed.textContent = `${speedKmh} km/h`;
+    hudLives.textContent = `${lives}/${CONFIG.MAX_LIVES}`;
+
+    // Invulnerability timer
+    if (bike.invulnTimer > 0) bike.invulnTimer -= dt;
+  }
+
+  function onCrash() {
+    lives--;
+    if (lives > 0) {
+      // Respawn
+      const cp = currentCheckpoint;
+      const y = cp.y + 0.6;
+      // Ensure terrain ahead of checkpoint exists to avoid empty forward
+      terrain.ensureAhead(cp.x + 80, maxXReached);
+      // Remove existing bike
+      bike.destroy();
+      // Nudge slightly behind the checkpoint to avoid spawning exactly on a lip
+      const xSpawn = cp.x - 0.3;
+      bike = new Bike(world, { x: xSpawn, y: y });
+      motorTarget = 0;
+      bike.invulnTimer = CONFIG.INVULN_TIME;
+    } else {
+      // Game Over
+      finalScoreText.textContent = `Score: ${Math.floor(maxXReached)} m`;
+      // If top 10 or if list less than 10, prompt for name; otherwise go straight to leaderboard
+      const lb = loadLB();
+      const qualifies = lb.length < 10 || maxXReached > (lb[lb.length - 1]?.score || 0);
+      if (qualifies) {
+        namePrompt.classList.remove('hidden');
+        saveScoreBtn.classList.remove('hidden');
+        nameInput.value = '';
+        saveScoreBtn.disabled = true;
+        setTimeout(() => nameInput.focus(), 0);
+        setState(STATE.GAMEOVER);
+      } else {
+        namePrompt.classList.add('hidden');
+        saveScoreBtn.classList.add('hidden');
+        renderLeaderboard();
+        setState(STATE.LEADERBOARD);
+      }
+    }
+  }
+
+  function submitScoreAndHide() {
+    let raw = (nameInput.value || '').trim();
+    raw = raw.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 3);
+    if (!raw) {
+      // Require a non-empty initials before saving
+      namePrompt.classList.remove('hidden');
+      saveScoreBtn.classList.remove('hidden');
+      saveScoreBtn.disabled = true;
+      setTimeout(() => nameInput.focus(), 0);
+      return;
+    }
+    addScore(raw, Math.floor(maxXReached));
+    namePrompt.classList.add('hidden');
+    saveScoreBtn.classList.add('hidden');
+    renderLeaderboard(); // update
+    setState(STATE.LEADERBOARD);
+  }
+
+  function render() {
+    // Terrain and bike
+    terrain.draw(camera);
+    bike.draw(camera);
+
+    // Clouds (parallax)
+    drawClouds();
+  }
+
+  function drawBackground() {
+    // Sky gradient already in CSS; draw subtle horizon
+    const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+    g.addColorStop(0, '#78c8ff');
+    g.addColorStop(0.6, '#bde1ff');
+    g.addColorStop(1, '#e6f6ff');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  }
+
+  function drawClouds() {
+    if (!cloudImg.complete) return;
+    const par = CONFIG.CLOUDS.parallax;
+    for (const c of clouds) {
+      const wx = c.x + (terrain.worldOffsetX + camera.x) * par;
+      const sx = Math.round((wx % 200) / 200 * VIEW_W);
+      const sy = Math.round(VIEW_H * 0.22 + (c.y - 16) * 10);
+      const w = cloudImg.width * c.s * 0.35;
+      const h = cloudImg.height * c.s * 0.35;
+      ctx.drawImage(cloudImg, sx - w * 0.5, sy - h * 0.5, w, h);
+    }
+  }
+
+  function resizeCanvasToDisplaySize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+    VIEW_W = w;
+    VIEW_H = h;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    const needResize = canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr);
+    if (needResize) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    // scale drawing ops so our coordinates are in CSS pixels
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+  }
+
+  // Start in menu
+  setState(STATE.MENU);
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
