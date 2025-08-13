@@ -406,11 +406,18 @@
       treePerChunk: 2.0,
       rockPerChunk: 1.2,
       hayPerChunk: 0.6,
-      minSpacing: 10.0,
+      minSpacing: 7.0,
       treeScaleMin: 0.9,
       treeScaleMax: 1.25,
       rockScaleMin: 0.85,
-      rockScaleMax: 1.15
+      rockScaleMax: 1.15,
+      treeUnder: 6.0,
+      rockUnder: 3.6,
+      hayUnder: 3.0,
+      sup1PerChunk: 2.4,
+      sup2PerChunk: 2.4,
+      underDepthMin: 1.8,
+      underDepthMax: 3.5
     },
 
     // Image clouds (parallax)
@@ -471,6 +478,8 @@
   const treeImg = new Image(); treeImg.src = 'assets/img/crococross-tree.png';
   const rockImg = new Image(); rockImg.src = 'assets/img/crococross-rock.png';
   const hayImg = new Image();  hayImg.src  = 'assets/img/crococross-foin.png';
+  const sup1Img = new Image(); sup1Img.src = 'assets/img/crococross-supporter1.png';
+  const sup2Img = new Image(); sup2Img.src = 'assets/img/crococross-supporter2.png';
   const cloudImg = new Image(); cloudImg.src = 'assets/img/crococross-cloud.png';
   const cloud2Img = new Image(); cloud2Img.src = 'assets/img/crococross-cloud2.png';
 
@@ -1166,20 +1175,56 @@
       const tCount = Math.max(0, Math.round(CONFIG.DECOR.treePerChunk + (rng() - 0.5)));
       for (let i = 0; i < tCount; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, 0.14, rng);
+        pushIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, 0.10, rng);
       }
       // Rocks
       const rCount = Math.max(0, Math.round(CONFIG.DECOR.rockPerChunk + (rng() - 0.5)));
       for (let i = 0; i < rCount; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, 0.10, rng);
+        pushIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, 0.08, rng);
       }
       // Hay bales
       const hCount = Math.max(0, Math.round((CONFIG.DECOR.hayPerChunk || 0) + (rng() - 0.5)));
       for (let i = 0; i < hCount; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('hay', x, 0.9, 1.15, 0.08, rng);
+        pushIfOk('hay', x, 0.9, 1.15, 0.07, rng);
       }
+
+      // UNDER-FILL extras (placed deeper inside the green area)
+      const uMin = CONFIG.DECOR.underDepthMin || 0.35;
+      const uMax = CONFIG.DECOR.underDepthMax || 1.6;
+      const depth = () => uMin + rng() * Math.max(0.01, (uMax - uMin));
+
+      // Trees under
+      const tu = Math.max(0, Math.round((CONFIG.DECOR.treeUnder || 0) + (rng() - 0.5)));
+      for (let i = 0; i < tu; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, depth(), rng);
+      }
+      // Rocks under
+      const ru = Math.max(0, Math.round((CONFIG.DECOR.rockUnder || 0) + (rng() - 0.5)));
+      for (let i = 0; i < ru; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, depth(), rng);
+      }
+      // Hay under
+      const hu = Math.max(0, Math.round((CONFIG.DECOR.hayUnder || 0) + (rng() - 0.5)));
+      for (let i = 0; i < hu; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushIfOk('hay', x, 0.9, 1.15, depth(), rng);
+      }
+      // Supporters under
+      const s1 = Math.max(0, Math.round((CONFIG.DECOR.sup1PerChunk || 0) + (rng() - 0.5)));
+      for (let i = 0; i < s1; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushIfOk('sup1', x, 0.9, 1.15, depth(), rng);
+      }
+      const s2 = Math.max(0, Math.round((CONFIG.DECOR.sup2PerChunk || 0) + (rng() - 0.5)));
+      for (let i = 0; i < s2; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushIfOk('sup2', x, 0.9, 1.15, depth(), rng);
+      }
+
       chunk.decor = dec;
     }
 
@@ -1194,6 +1239,31 @@
         for (const g of ch.gfx) {
           const pts = g.pts;
           if (pts.length < 2) continue;
+
+          // Decorations first so ground fill occludes their bases
+          this.ensureDecorations(ch);
+          if (false && ch.decor && ch.decor.length) {
+            for (const d of ch.decor) {
+              const img =
+                d.type === 'tree' ? treeImg :
+                d.type === 'rock' ? rockImg :
+                d.type === 'hay'  ? hayImg  :
+                d.type === 'sup1' ? sup1Img : sup2Img;
+              if (!img.complete) continue;
+              const sx = worldToScreenX(d.x, camera.x);
+              const sy = worldToScreenY(d.y, camera.y);
+              const baseWm = d.type === 'tree' ? 2.0 : (d.type === 'rock' ? 1.2 : (d.type === 'hay' ? 1.4 : 1.8));
+              const w = baseWm * scale * d.s;
+              const h = w * (img.height / Math.max(1, img.width));
+              ctx.save();
+              ctx.translate(sx, sy);
+              ctx.scale(d.flip ? -1 : 1, 1);
+              // Keep a bit of extra burial; ground fill drawn after will hide the base entirely
+              const buryPad = (d.type === 'tree' ? 0.35 : (d.type === 'rock' ? 0.22 : (d.type === 'hay' ? 0.18 : 0.22))) * h;
+              ctx.drawImage(img, -w * 0.5, -h + buryPad, w, h);
+              ctx.restore();
+            }
+          }
 
           // Build path
           ctx.beginPath();
@@ -1236,21 +1306,28 @@
           ctx.fill();
           ctx.restore();
 
-          // Decorations draw (trees/rocks) before outline
-          this.ensureDecorations(ch);
+          // Decorations after fill so they appear inside green; lip/outline drawn after to hide bases near ridge
+          // this.ensureDecorations(ch);
           if (ch.decor && ch.decor.length) {
             for (const d of ch.decor) {
-              const img = d.type === 'tree' ? treeImg : (d.type === 'rock' ? rockImg : hayImg);
+              const img =
+                d.type === 'tree' ? treeImg :
+                d.type === 'rock' ? rockImg :
+                d.type === 'hay'  ? hayImg  :
+                d.type === 'sup1' ? sup1Img : sup2Img;
               if (!img.complete) continue;
               const sx = worldToScreenX(d.x, camera.x);
               const sy = worldToScreenY(d.y, camera.y);
-              const baseWm = d.type === 'tree' ? 2.0 : (d.type === 'rock' ? 1.2 : 1.4);
+              const baseWm = d.type === 'tree' ? 2.0 : (d.type === 'rock' ? 1.2 : (d.type === 'hay' ? 1.4 : 1.8));
               const w = baseWm * scale * d.s;
               const h = w * (img.height / Math.max(1, img.width));
               ctx.save();
               ctx.translate(sx, sy);
               ctx.scale(d.flip ? -1 : 1, 1);
-              ctx.drawImage(img, -w * 0.5, -h, w, h);
+              // Force deeper burial: push the sprite further below the grass line
+              // Note: screen Y grows downwards, so we ADD buryPad to move the sprite deeper.
+              const buryPad = (d.type === 'tree' ? 0.35 : (d.type === 'rock' ? 0.22 : (d.type === 'hay' ? 0.18 : 0.22))) * h; // fraction of image height
+              ctx.drawImage(img, -w * 0.5, -h + buryPad, w, h);
               ctx.restore();
             }
           }
@@ -1259,8 +1336,8 @@
           ctx.save();
           ctx.lineJoin = 'round';
           ctx.lineCap = 'round';
-          ctx.strokeStyle = '#7cd37b';
-          ctx.lineWidth = CONFIG.GROUND_THICK + 10; // lip thickness
+          ctx.strokeStyle = '#6fd97a';
+          ctx.lineWidth = CONFIG.GROUND_THICK + 18; // thicker lip to cover bases
           ctx.beginPath();
           for (let i = 0; i < pts.length; i++) {
             const p = pts[i];
