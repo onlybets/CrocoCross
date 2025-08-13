@@ -403,21 +403,22 @@
 
     // Decorative content (images) — counts per 60 m chunk
     DECOR: {
-      treePerChunk: 1.4,
-      rockPerChunk: 0.7,
-      minSpacing: 12.0,
+      treePerChunk: 2.0,
+      rockPerChunk: 1.2,
+      hayPerChunk: 0.6,
+      minSpacing: 10.0,
       treeScaleMin: 0.9,
-      treeScaleMax: 1.2,
+      treeScaleMax: 1.25,
       rockScaleMin: 0.85,
       rockScaleMax: 1.15
     },
 
     // Image clouds (parallax)
     CLOUDS: {
-      count: 10,
+      count: 6,
       parallax: 0.06,
-      scaleMin: 0.7,
-      scaleMax: 1.2
+      scaleMin: 0.5,
+      scaleMax: 0.9
     },
 
     // Audio
@@ -469,7 +470,9 @@
   // Decorative images
   const treeImg = new Image(); treeImg.src = 'assets/img/crococross-tree.png';
   const rockImg = new Image(); rockImg.src = 'assets/img/crococross-rock.png';
+  const hayImg = new Image();  hayImg.src  = 'assets/img/crococross-foin.png';
   const cloudImg = new Image(); cloudImg.src = 'assets/img/crococross-cloud.png';
+  const cloud2Img = new Image(); cloud2Img.src = 'assets/img/crococross-cloud2.png';
 
   // Audio assets
   const tracks = {
@@ -1144,12 +1147,16 @@
         return this.sampleHeight(xp);
       };
       const dec = [];
-      const pushIfOk = (type, x, sMin, sMax, yOffset, rng) => {
+      const pushIfOk = (type, x, sMin, sMax, bury, rng) => {
+        // small horizontal jitter for variety
+        x += (rng() - 0.5) * 1.6;
         if (x <= chunk.xStart + 1 || x >= chunk.xEnd - 1) return;
         if (inHole(x)) return;
         for (const d of dec) if (Math.abs(d.x - x) < CONFIG.DECOR.minSpacing) return;
         const s = sMin + rng() * (sMax - sMin);
-        const y = yAt(x) + yOffset;
+        // always sink slightly below the ground line (bury into green)
+        const buryAmt = Math.abs(bury) * (0.6 + 0.8 * rng()); // 0.6..1.4 * bury
+        const y = yAt(x) - buryAmt;
         dec.push({ type, x, y, s, flip: rng() < 0.5 });
       };
       // Local deterministic RNG based on world seed and chunk start
@@ -1159,13 +1166,19 @@
       const tCount = Math.max(0, Math.round(CONFIG.DECOR.treePerChunk + (rng() - 0.5)));
       for (let i = 0; i < tCount; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, 0.08, rng);
+        pushIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, 0.14, rng);
       }
       // Rocks
       const rCount = Math.max(0, Math.round(CONFIG.DECOR.rockPerChunk + (rng() - 0.5)));
       for (let i = 0; i < rCount; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, 0.04, rng);
+        pushIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, 0.10, rng);
+      }
+      // Hay bales
+      const hCount = Math.max(0, Math.round((CONFIG.DECOR.hayPerChunk || 0) + (rng() - 0.5)));
+      for (let i = 0; i < hCount; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushIfOk('hay', x, 0.9, 1.15, 0.08, rng);
       }
       chunk.decor = dec;
     }
@@ -1227,11 +1240,11 @@
           this.ensureDecorations(ch);
           if (ch.decor && ch.decor.length) {
             for (const d of ch.decor) {
-              const img = d.type === 'tree' ? treeImg : rockImg;
+              const img = d.type === 'tree' ? treeImg : (d.type === 'rock' ? rockImg : hayImg);
               if (!img.complete) continue;
               const sx = worldToScreenX(d.x, camera.x);
               const sy = worldToScreenY(d.y, camera.y);
-              const baseWm = d.type === 'tree' ? 2.0 : 1.2;
+              const baseWm = d.type === 'tree' ? 2.0 : (d.type === 'rock' ? 1.2 : 1.4);
               const w = baseWm * scale * d.s;
               const h = w * (img.height / Math.max(1, img.width));
               ctx.save();
@@ -1241,6 +1254,22 @@
               ctx.restore();
             }
           }
+
+          // Draw a soft grass lip to bury decorations into the ground
+          ctx.save();
+          ctx.lineJoin = 'round';
+          ctx.lineCap = 'round';
+          ctx.strokeStyle = '#7cd37b';
+          ctx.lineWidth = CONFIG.GROUND_THICK + 10; // lip thickness
+          ctx.beginPath();
+          for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const sx = worldToScreenX(p.x, camera.x);
+            const sy = worldToScreenY(p.y, camera.y);
+            if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+          }
+          ctx.stroke();
+          ctx.restore();
 
           // Outline
           ctx.beginPath();
@@ -1663,9 +1692,10 @@
     const N = CONFIG.CLOUDS.count;
     for (let i = 0; i < N; i++) {
       clouds.push({
-        x: rng() * 300,                              // world-offset x basis
-        y: 16 + rng() * 10,                          // world height band
-        s: CONFIG.CLOUDS.scaleMin + rng() * (CONFIG.CLOUDS.scaleMax - CONFIG.CLOUDS.scaleMin)
+        x: rng() * 300, // world-offset x basis
+        y: 22 + rng() * 8, // higher band in the sky
+        s: CONFIG.CLOUDS.scaleMin + rng() * (CONFIG.CLOUDS.scaleMax - CONFIG.CLOUDS.scaleMin),
+        t: rng() < 0.5 ? 'c1' : 'c2' // choose sprite
       });
     }
   }
@@ -1988,15 +2018,17 @@
   }
 
   function drawClouds() {
-    if (!cloudImg.complete) return;
     const par = CONFIG.CLOUDS.parallax;
     for (const c of clouds) {
+      const img = (c.t === 'c2' && cloud2Img.complete) ? cloud2Img : cloudImg;
+      if (!img.complete) continue;
       const wx = c.x + (terrain.worldOffsetX + camera.x) * par;
       const sx = Math.round((wx % 200) / 200 * VIEW_W);
-      const sy = Math.round(VIEW_H * 0.22 + (c.y - 16) * 10);
-      const w = cloudImg.width * c.s * 0.35;
-      const h = cloudImg.height * c.s * 0.35;
-      ctx.drawImage(cloudImg, sx - w * 0.5, sy - h * 0.5, w, h);
+      // place higher and smaller
+      const sy = Math.round(VIEW_H * 0.12 + (c.y - 22) * 8);
+      const w = img.width * c.s * 0.30;
+      const h = img.height * c.s * 0.30;
+      ctx.drawImage(img, sx - w * 0.5, sy - h * 0.5, w, h);
     }
   }
 
