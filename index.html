@@ -1124,7 +1124,7 @@
     }
 
     shiftWorldIfNeeded(bikeX, onShift) {
-      if (bikeX > CONFIG.RECENTER_X) {
+      if (bikeX >= CONFIG.RECENTER_X) {
         // Move world so that the bike returns near x ~ 10
         // Box2D/Planck shifts bodies by subtracting the vector passed to shiftOrigin.
         // To get newBikeX = 10, we need to subtract (bikeX - 10) from all bodies.
@@ -1149,8 +1149,7 @@
           this.rebuildGfx(ch);
         }
         for (const cp of this.checkpoints) { cp.x -= s; }
-        this.generatedToX -= s;
-        this.visibleFromX -= s;
+        this.recomputeBoundsAfterShift();
 
         // Keep absolute score continuous: absX = worldOffsetX + bikeX (new bikeX ~ 10)
         this.worldOffsetX += s;
@@ -1194,6 +1193,20 @@
         gfx.push({ pts, baseY });
       }
       ch.gfx = gfx;
+    }
+
+    rebuildAllGfx() {
+      for (const ch of this.chunks) this.rebuildGfx(ch);
+    }
+
+    recomputeBoundsAfterShift() {
+      let minStart = Infinity; let maxEnd = -Infinity;
+      for (const ch of this.chunks) {
+        if (ch.xStart < minStart) minStart = ch.xStart;
+        if (ch.xEnd > maxEnd) maxEnd = ch.xEnd;
+      }
+      if (minStart !== Infinity) this.visibleFromX = minStart; // conservative
+      if (maxEnd !== -Infinity) this.generatedToX = maxEnd;
     }
 
     hasGfxNear(x, span = 60) {
@@ -1349,9 +1362,10 @@
         this.lastDrawRecenterCount = this.recenterCount;
       }
       // If for any reason no ground covers the camera span, attempt a lazy rebuild and ensure ahead.
-      if (!this.hasGfxNear(camera.x, CONFIG.CHUNK_LENGTH)) {
-        for (const ch of this.chunks) this.rebuildGfx(ch);
-        this.ensureAhead(camera.x + 2 * CONFIG.CHUNK_LENGTH, this.worldOffsetX + camera.x);
+      if (!this.hasGfxNear(camera.x, CONFIG.CHUNK_LENGTH) || (typeof bike !== 'undefined' && bike && !this.hasGfxNear(bike.getPos().x, CONFIG.CHUNK_LENGTH))) {
+        for (const ch of this.chunks) this.rebuildAllGfx ? this.rebuildAllGfx() : this.rebuildGfx(ch);
+        const refX = (typeof bike !== 'undefined' && bike) ? bike.getPos().x : camera.x;
+        this.ensureAhead(refX + 2 * CONFIG.CHUNK_LENGTH, this.worldOffsetX + refX);
       }
       // Ground fill + stroke
       ctx.lineWidth = CONFIG.GROUND_THICK;
@@ -2227,8 +2241,13 @@
       // Respawn
       const cp = currentCheckpoint;
       const y = cp.y + 0.6;
-      // Ensure terrain ahead of checkpoint exists to avoid empty forward
-      terrain.ensureAhead(cp.x + 80, maxXReached);
+      // Ensure visuals/terrain around the checkpoint before respawn
+      terrain.rebuildAllGfx && terrain.rebuildAllGfx();
+      terrain.ensureAhead(cp.x + 120, maxXReached);
+      if (!terrain.hasGfxNear(cp.x, CONFIG.CHUNK_LENGTH)) {
+        terrain.rebuildAllGfx();
+        terrain.ensureAhead(cp.x + 2 * CONFIG.CHUNK_LENGTH, maxXReached);
+      }
       // Remove existing bike
       if (bike) bike.destroy();
       // Nudge slightly behind the checkpoint to avoid spawning exactly on a lip
