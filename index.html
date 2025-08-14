@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <title>Moto 2D - Endless Runner</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  // insert favicon
+  <link rel="icon" href="assets/img/favicon.png" type="image/png" />
   <!-- Planck.js (Box2D port) -->
   <script src="https://unpkg.com/planck@1.0.0/dist/planck.min.js"></script>
   <style>
@@ -234,7 +236,7 @@
       padding: clamp(12px, 1.8vw, 18px) clamp(28px, 3vw, 36px);
       border-width: 5px;
       border-radius: 16px;
-      background: #ffce3a;
+      background: #ffffff;
       box-shadow: 0 10px 24px rgba(0,0,0,0.35);
     }
     .leaderboard-side {
@@ -411,11 +413,16 @@
       treeScaleMax: 1.25,
       rockScaleMin: 0.85,
       rockScaleMax: 1.15,
-      treeUnder: 6.0,
-      rockUnder: 3.6,
-      hayUnder: 3.0,
-      sup1PerChunk: 2.4,
-      sup2PerChunk: 2.4,
+      treeUnder: 2.0,
+      rockUnder: 2.0,
+      hayUnder: 2.0,
+      sup1PerChunk: 2.0,
+      sup2PerChunk: 2.0,
+      rabbitUnder: 2.0,
+      carUnder: 2.0,
+      deerUnder: 2.0,
+      topAnchorMin: -0.03,
+      topAnchorMax: -0.01,
       underDepthMin: 1.8,
       underDepthMax: 3.5
     },
@@ -457,6 +464,8 @@
       lookAhead: 5.0,       // meters
       yLag: 0.08,           // 0..1
       xLag: 0.12,
+      snapX: 50.0,          // meters; hard snap threshold in X
+      snapY: 25.0,          // meters; hard snap threshold in Y
       groundPadBottom: 10.0 // meters extra below min Y for fills
     },
 
@@ -480,6 +489,9 @@
   const hayImg = new Image();  hayImg.src  = 'assets/img/crococross-foin.png';
   const sup1Img = new Image(); sup1Img.src = 'assets/img/crococross-supporter1.png';
   const sup2Img = new Image(); sup2Img.src = 'assets/img/crococross-supporter2.png';
+  const rabbitImg = new Image(); rabbitImg.src = 'assets/img/crococross-rabbit.png';
+  const carImg = new Image(); carImg.src = 'assets/img/crococross-car.png';
+  const deerImg = new Image(); deerImg.src = 'assets/img/crococross-biche.png';
   const cloudImg = new Image(); cloudImg.src = 'assets/img/crococross-cloud.png';
   const cloud2Img = new Image(); cloud2Img.src = 'assets/img/crococross-cloud2.png';
 
@@ -619,6 +631,8 @@
 
       this.worldOffsetX = 0; // accumulated shift for score continuity
       this.lastHoleEnd = -1e9;
+      this.recenterCount = 0;
+      this.lastDrawRecenterCount = 0;
 
       // Seeded phases for sine-based height to guarantee visible hills
       this.phase1 = this.rand() * Math.PI * 2;
@@ -1093,7 +1107,8 @@
 
       for (let i = 0; i < this.chunks.length; i++) {
         const ch = this.chunks[i];
-        const keep = (ch.xEnd >= minXToKeep) || (protectX >= ch.xStart && protectX <= ch.xEnd);
+        const pad = CONFIG.CHUNK_LENGTH;
+        const keep = (ch.xEnd >= (minXToKeep - pad)) || (protectX >= ch.xStart && protectX <= ch.xEnd);
         if (!keep) {
           // destroy bodies
           for (const s of ch.segments) {
@@ -1111,32 +1126,95 @@
 
     shiftWorldIfNeeded(bikeX, onShift) {
       if (bikeX > CONFIG.RECENTER_X) {
-        const shift = -bikeX + 10; // bring near origin
-        const v = Vec2(shift, 0);
-        this.world.shiftOrigin(v); // Planck API: translate all bodies
-        // Update stored coordinates
+        // Move world so that the bike returns near x ~ 10
+        // Box2D/Planck shifts bodies by subtracting the vector passed to shiftOrigin.
+        // To get newBikeX = 10, we need to subtract (bikeX - 10) from all bodies.
+        const s = (bikeX - 10);
+        const v = Vec2(s, 0);
+        this.world.shiftOrigin(v); // bodies newPos = oldPos - s
+
+        // Update stored coordinates with the SAME delta applied to bodies: subtract s
         for (const ch of this.chunks) {
-          ch.xStart += shift;
-          ch.xEnd += shift;
-          for (const s of ch.segments) {
-            for (const p of s.pts) { p.x += shift; }
+          ch.xStart -= s;
+          ch.xEnd  -= s;
+          for (const seg of ch.segments) {
+            for (const p of seg.pts) { p.x -= s; }
           }
           for (const g of ch.gfx) {
-            for (const p of g.pts) { p.x += shift; }
+            for (const p of g.pts) { p.x -= s; }
           }
-          for (const h of (ch.holes || [])) { h.start += shift; h.end += shift; }
+          for (const h of (ch.holes || [])) { h.start -= s; h.end -= s; }
+          // Rebuild visual data after shift to avoid stale paths
+          delete ch.decorUnder;
+          delete ch.decorTop;
+          this.rebuildGfx(ch);
         }
-        for (const cp of this.checkpoints) { cp.x += shift; }
-        this.generatedToX += shift;
-        this.visibleFromX += shift;
-        this.worldOffsetX -= shift; // accumulate for score continuity
-        onShift && onShift(shift);
+        for (const cp of this.checkpoints) { cp.x -= s; }
+        this.generatedToX -= s;
+        this.visibleFromX -= s;
+
+        // Keep absolute score continuous: absX = worldOffsetX + bikeX (new bikeX ~ 10)
+        this.worldOffsetX += s;
+
+        // Ensure coverage around rider using NEW local coordinates (bike ~ 10 after shift)
+        const localTarget = 10 + CONFIG.CHUNK_LENGTH;
+        this.ensureAhead(localTarget, this.worldOffsetX + 10);
+
+        // Visual safety: if no gfx covers the local rider span yet, rebuild and extend ahead once more.
+        if (!this.hasGfxNear(10, CONFIG.CHUNK_LENGTH)) {
+          for (const ch of this.chunks) this.rebuildGfx(ch);
+          this.ensureAhead(10 + 2 * CONFIG.CHUNK_LENGTH, this.worldOffsetX + 10);
+        }
+
+        // Count recenters (for debug)
+        this.recenterCount++;
+
+        // Notify applied delta to camera/users as the delta bodies experienced: -s
+        onShift && onShift(-s);
       }
+    }
+
+    rebuildGfx(ch) {
+      const gfx = [];
+      for (const seg of ch.segments) {
+        const src = seg.pts || [];
+        // Sort by x to guarantee a valid polyline after shifts and seam edits
+        const ptsSorted = src.slice().sort((a, b) => a.x - b.x);
+        // Deduplicate nearly-equal x to avoid zero-length segments
+        const pts = [];
+        for (let i = 0; i < ptsSorted.length; i++) {
+          const p = ptsSorted[i];
+          if (i === 0 || Math.abs(p.x - ptsSorted[i - 1].x) > 1e-6) {
+            pts.push({ x: p.x, y: p.y });
+          }
+        }
+        if (pts.length < 2) continue;
+        let localMin = Infinity;
+        for (const p of pts) if (p.y < localMin) localMin = p.y;
+        const baseY = Math.min(localMin - 6, CONFIG.BASELINE_Y);
+        gfx.push({ pts, baseY });
+      }
+      ch.gfx = gfx;
+    }
+
+    hasGfxNear(x, span = 60) {
+      const a = x - span, b = x + span;
+      for (const ch of this.chunks) {
+        const gx = ch.gfx || [];
+        for (const g of gx) {
+          const pts = g.pts || [];
+          if (pts.length < 2) continue;
+          const left = pts[0].x;
+          const right = pts[pts.length - 1].x;
+          if (right >= a && left <= b) return true;
+        }
+      }
+      return false;
     }
 
     // Ensure per-chunk decorations exist (deterministic, no physics)
     ensureDecorations(chunk) {
-      if (chunk.decor) return;
+      if (chunk.decorUnder && chunk.decorTop) return;
       const holes = chunk.holes || [];
       const inHole = (x) => {
         for (const h of holes) if (x >= h.start && x <= h.end) return true;
@@ -1155,39 +1233,56 @@
         }
         return this.sampleHeight(xp);
       };
-      const dec = [];
-      const pushIfOk = (type, x, sMin, sMax, bury, rng) => {
+      const decTop = [];
+      const decUnder = [];
+      const nearAny = (xx) => {
+        for (const d of decTop) if (Math.abs(d.x - xx) < CONFIG.DECOR.minSpacing) return true;
+        for (const d of decUnder) if (Math.abs(d.x - xx) < CONFIG.DECOR.minSpacing) return true;
+        return false;
+      };
+      const pushUnderIfOk = (type, x, sMin, sMax, bury, rng) => {
         // small horizontal jitter for variety
         x += (rng() - 0.5) * 1.6;
         if (x <= chunk.xStart + 1 || x >= chunk.xEnd - 1) return;
         if (inHole(x)) return;
-        for (const d of dec) if (Math.abs(d.x - x) < CONFIG.DECOR.minSpacing) return;
+        if (nearAny(x)) return;
         const s = sMin + rng() * (sMax - sMin);
-        // always sink slightly below the ground line (bury into green)
+        // place below the ground line (in the green)
         const buryAmt = Math.abs(bury) * (0.6 + 0.8 * rng()); // 0.6..1.4 * bury
         const y = yAt(x) - buryAmt;
-        dec.push({ type, x, y, s, flip: rng() < 0.5 });
+        decUnder.push({ type, layer: 'under', x, y, s, flip: rng() < 0.5 });
+      };
+      const pushTopIfOk = (type, x, sMin, sMax, rng) => {
+        // small horizontal jitter for variety
+        x += (rng() - 0.5) * 1.6;
+        if (x <= chunk.xStart + 1 || x >= chunk.xEnd - 1) return;
+        if (inHole(x)) return;
+        if (nearAny(x)) return;
+        const s = sMin + rng() * (sMax - sMin);
+        // place slightly above the ground line (anchored on top)
+        const apMin = CONFIG.DECOR.topAnchorMin || 0.04;
+        const apMax = CONFIG.DECOR.topAnchorMax || 0.07;
+        const y = yAt(x) + (apMin + rng() * Math.max(0.001, apMax - apMin));
+        decTop.push({ type, layer: 'top', x, y, s, flip: rng() < 0.5 });
       };
       // Local deterministic RNG based on world seed and chunk start
       const seedMix = (this.seed ^ (Math.floor(chunk.xStart * 9973) | 0)) >>> 0;
       const rng = mulberry32(seedMix || 1);
-      // Trees
+      // TOP anchored (on the ridge): tree/rock/hay
       const tCount = Math.max(0, Math.round(CONFIG.DECOR.treePerChunk + (rng() - 0.5)));
       for (let i = 0; i < tCount; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, 0.10, rng);
+        pushTopIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, rng);
       }
-      // Rocks
       const rCount = Math.max(0, Math.round(CONFIG.DECOR.rockPerChunk + (rng() - 0.5)));
       for (let i = 0; i < rCount; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, 0.08, rng);
+        pushTopIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, rng);
       }
-      // Hay bales
       const hCount = Math.max(0, Math.round((CONFIG.DECOR.hayPerChunk || 0) + (rng() - 0.5)));
       for (let i = 0; i < hCount; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('hay', x, 0.9, 1.15, 0.07, rng);
+        pushTopIfOk('hay', x, 0.9, 1.15, rng);
       }
 
       // UNDER-FILL extras (placed deeper inside the green area)
@@ -1199,43 +1294,74 @@
       const tu = Math.max(0, Math.round((CONFIG.DECOR.treeUnder || 0) + (rng() - 0.5)));
       for (let i = 0; i < tu; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, depth(), rng);
+        pushUnderIfOk('tree', x, CONFIG.DECOR.treeScaleMin, CONFIG.DECOR.treeScaleMax, depth(), rng);
       }
       // Rocks under
       const ru = Math.max(0, Math.round((CONFIG.DECOR.rockUnder || 0) + (rng() - 0.5)));
       for (let i = 0; i < ru; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, depth(), rng);
+        pushUnderIfOk('rock', x, CONFIG.DECOR.rockScaleMin, CONFIG.DECOR.rockScaleMax, depth(), rng);
       }
       // Hay under
       const hu = Math.max(0, Math.round((CONFIG.DECOR.hayUnder || 0) + (rng() - 0.5)));
       for (let i = 0; i < hu; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('hay', x, 0.9, 1.15, depth(), rng);
+        pushUnderIfOk('hay', x, 0.9, 1.15, depth(), rng);
       }
-      // Supporters under
+      // Supporters under only
       const s1 = Math.max(0, Math.round((CONFIG.DECOR.sup1PerChunk || 0) + (rng() - 0.5)));
       for (let i = 0; i < s1; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('sup1', x, 0.9, 1.15, depth(), rng);
+        pushUnderIfOk('sup1', x, 0.9, 1.15, depth(), rng);
       }
       const s2 = Math.max(0, Math.round((CONFIG.DECOR.sup2PerChunk || 0) + (rng() - 0.5)));
       for (let i = 0; i < s2; i++) {
         const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
-        pushIfOk('sup2', x, 0.9, 1.15, depth(), rng);
+        pushUnderIfOk('sup2', x, 0.9, 1.15, depth(), rng);
+      }
+      // Rabbits under
+      const rb = Math.max(0, Math.round((CONFIG.DECOR.rabbitUnder || 0) + (rng() - 0.5)));
+      for (let i = 0; i < rb; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushUnderIfOk('rabbit', x, 0.95, 1.15, depth(), rng);
+      }
+      // Cars under
+      const car = Math.max(0, Math.round((CONFIG.DECOR.carUnder || 0) + (rng() - 0.5)));
+      for (let i = 0; i < car; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushUnderIfOk('car', x, 0.95, 1.15, depth(), rng);
+      }
+      // Deer (biche) under
+      const deer = Math.max(0, Math.round((CONFIG.DECOR.deerUnder || 0) + (rng() - 0.5)));
+      for (let i = 0; i < deer; i++) {
+        const x = chunk.xStart + 2 + rng() * Math.max(0, (chunk.xEnd - chunk.xStart - 4));
+        pushUnderIfOk('deer', x, 0.95, 1.15, depth(), rng);
       }
 
-      chunk.decor = dec;
+      chunk.decorUnder = decUnder;
+      chunk.decorTop = decTop;
     }
 
     draw(camera) {
       const scale = CONFIG.SCALE;
+      // If a recenter occurred since last draw, rebuild all chunk gfx once (safest)
+      if (this.lastDrawRecenterCount !== this.recenterCount) {
+        for (const ch of this.chunks) this.rebuildGfx(ch);
+        this.lastDrawRecenterCount = this.recenterCount;
+      }
+      // If for any reason no ground covers the camera span, attempt a lazy rebuild and ensure ahead.
+      if (!this.hasGfxNear(camera.x, CONFIG.CHUNK_LENGTH)) {
+        for (const ch of this.chunks) this.rebuildGfx(ch);
+        this.ensureAhead(camera.x + 2 * CONFIG.CHUNK_LENGTH, this.worldOffsetX + camera.x);
+      }
       // Ground fill + stroke
       ctx.lineWidth = CONFIG.GROUND_THICK;
       ctx.strokeStyle = '#2e8b57'; // grass outline
       ctx.fillStyle = '#7cd37b';   // grass fill top
 
       for (const ch of this.chunks) {
+        // Safety: if gfx got invalidated around a recenter, rebuild lazily
+        if (!ch.gfx || !ch.gfx.length) this.rebuildGfx(ch);
         for (const g of ch.gfx) {
           const pts = g.pts;
           if (pts.length < 2) continue;
@@ -1306,28 +1432,62 @@
           ctx.fill();
           ctx.restore();
 
-          // Decorations after fill so they appear inside green; lip/outline drawn after to hide bases near ridge
-          // this.ensureDecorations(ch);
-          if (ch.decor && ch.decor.length) {
-            for (const d of ch.decor) {
+          // Draw UNDER (in the green)
+          if (ch.decorUnder && ch.decorUnder.length) {
+            for (const d of ch.decorUnder) {
               const img =
                 d.type === 'tree' ? treeImg :
                 d.type === 'rock' ? rockImg :
                 d.type === 'hay'  ? hayImg  :
-                d.type === 'sup1' ? sup1Img : sup2Img;
-              if (!img.complete) continue;
+                d.type === 'sup1' ? sup1Img :
+                d.type === 'sup2' ? sup2Img :
+                d.type === 'rabbit' ? rabbitImg :
+                d.type === 'car' ? carImg :
+                d.type === 'deer' ? ((deerImg && deerImg.naturalWidth > 0) ? deerImg : rabbitImg) : null;
+              if (!img || !img.complete) continue;
               const sx = worldToScreenX(d.x, camera.x);
               const sy = worldToScreenY(d.y, camera.y);
-              const baseWm = d.type === 'tree' ? 2.0 : (d.type === 'rock' ? 1.2 : (d.type === 'hay' ? 1.4 : 1.8));
+              const baseWm =
+                d.type === 'tree' ? 2.0 :
+                d.type === 'rock' ? 1.2 :
+                d.type === 'hay'  ? 1.4 :
+                d.type === 'car'  ? 4.0 :
+                d.type === 'deer' ? 1.6 :
+                (d.type === 'sup1' || d.type === 'sup2') ? 2.4 : 1.2; // supporters 2x
               const w = baseWm * scale * d.s;
               const h = w * (img.height / Math.max(1, img.width));
               ctx.save();
               ctx.translate(sx, sy);
               ctx.scale(d.flip ? -1 : 1, 1);
-              // Force deeper burial: push the sprite further below the grass line
-              // Note: screen Y grows downwards, so we ADD buryPad to move the sprite deeper.
-              const buryPad = (d.type === 'tree' ? 0.35 : (d.type === 'rock' ? 0.22 : (d.type === 'hay' ? 0.18 : 0.22))) * h; // fraction of image height
+              // deeper inside green (positive buryPad)
+              const buryPad =
+                (d.type === 'tree' ? 0.35 :
+                 d.type === 'rock' ? 0.22 :
+                 d.type === 'hay'  ? 0.18 :
+                 d.type === 'car'  ? 0.22 : 0.20) * h;
               ctx.drawImage(img, -w * 0.5, -h + buryPad, w, h);
+              ctx.restore();
+            }
+          }
+          // Draw TOP (anchored on the ridge, then the lip/outline will pass over the base)
+          if (ch.decorTop && ch.decorTop.length) {
+            for (const d of ch.decorTop) {
+              const img =
+                d.type === 'tree' ? treeImg :
+                d.type === 'rock' ? rockImg :
+                d.type === 'hay'  ? hayImg : null;
+              if (!img || !img.complete) continue;
+              const sx = worldToScreenX(d.x, camera.x);
+              const sy = worldToScreenY(d.y, camera.y);
+              const baseWm = d.type === 'tree' ? 2.0 : (d.type === 'rock' ? 1.2 : 1.4);
+              const w = baseWm * scale * d.s;
+              const h = w * (img.height / Math.max(1, img.width));
+              ctx.save();
+              ctx.translate(sx, sy);
+              ctx.scale(d.flip ? -1 : 1, 1);
+              // slightly embedded in ridge (avoid floating, not too deep)
+              const buryPadTop = 0.10 * h;
+              ctx.drawImage(img, -w * 0.5, -h + buryPadTop, w, h);
               ctx.restore();
             }
           }
@@ -1791,8 +1951,12 @@
     initClouds();
 
     // Initial flat ground to start (spawn a bit to the right of origin)
-    terrain.ensureAhead(200, 0);
-    const spawnX = 5;
+    // Optional quick-start parameter (?start=XXXX) to spawn near a given X for testing
+    const params = new URLSearchParams(location.search);
+    const startParam = parseFloat(params.get('start'));
+    const spawnX = Number.isFinite(startParam) ? startParam : 5;
+
+    terrain.ensureAhead(spawnX + 200, 0);
     // Prefer exact ground from generated chunk (post-smoothing), fallback to sampled noise
     let spawnChunk = null;
     for (const ch of terrain.chunks) {
@@ -1808,6 +1972,9 @@
     currentCheckpoint = cp;
     // spawn bike with the same vertical offset as respawn to avoid intersecting ground
     bike = new Bike(world, { x: currentCheckpoint.x, y: currentCheckpoint.y + 0.6 });
+    // Align camera to spawn to avoid any initial off-screen frame
+    camera.x = bike.getPos().x + CONFIG.CAM.lookAhead;
+    camera.y = bike.getPos().y;
     motorTarget = 0;
     bike.invulnTimer = CONFIG.INVULN_TIME;
 
@@ -1825,6 +1992,12 @@
       case 'ArrowRight': keys.right = true; break;
       case 'd': case 'D':
         CONFIG.DEBUG = !CONFIG.DEBUG; break;
+      case 't': case 'T':
+        if (CONFIG.DEBUG && state === STATE.PLAYING) { teleportToX(CONFIG.RECENTER_X - 2); }
+        break;
+      case 'g': case 'G':
+        if (CONFIG.DEBUG && state === STATE.PLAYING) { const cur = bike ? bike.getPos().x : 0; teleportToX(cur + 500); }
+        break;
       case 'Escape':
         if (state === STATE.PLAYING) {
           setState(STATE.PAUSED);
@@ -1962,6 +2135,14 @@
 
     // Distance/score progression
     const pos = bike.getPos();
+    // Hard snap guard: keep camera close to rider at all times
+    {
+      const desiredX = pos.x + CONFIG.CAM.lookAhead;
+      const snapX = CONFIG.CAM.snapX || 50;
+      const snapY = CONFIG.CAM.snapY || 25;
+      if (!Number.isFinite(camera.x) || Math.abs(camera.x - desiredX) > snapX) camera.x = desiredX;
+      if (!Number.isFinite(camera.y) || Math.abs(camera.y - pos.y) > snapY) camera.y = pos.y;
+    }
     const absoluteX = terrain.worldOffsetX + pos.x;
     if (absoluteX > maxXReached) maxXReached = absoluteX;
 
@@ -1974,11 +2155,29 @@
 
     // World recentering
     terrain.shiftWorldIfNeeded(pos.x, (shift) => {
-      // nothing extra needed; worldOffsetX updated
+      // Keep camera in sync with world origin shift to avoid pop-to-empty view
+      camera.x += shift;
+      // Safety snap if something went far off (e.g., after a big shift)
+      const desired = pos.x + CONFIG.CAM.lookAhead;
+      const snapX = CONFIG.CAM.snapX || 50;
+      if (!Number.isFinite(camera.x) || Math.abs(camera.x - desired) > snapX) {
+        camera.x = desired;
+      }
+      if (!Number.isFinite(camera.y)) camera.y = pos.y;
     });
 
-    // Camera follow
+    // Camera follow (with failsafes)
     const camTargetX = pos.x + CONFIG.CAM.lookAhead;
+    const snapX = CONFIG.CAM.snapX || 50;
+    const snapY = CONFIG.CAM.snapY || 25;
+    // If camera went invalid or drifted wildly, snap back immediately
+    if (!Number.isFinite(camera.x) || !Number.isFinite(camera.y)) {
+      camera.x = camTargetX;
+      camera.y = pos.y;
+    } else {
+      if (Math.abs(camera.x - camTargetX) > snapX) camera.x = camTargetX;
+      if (Math.abs(camera.y - pos.y) > snapY) camera.y = pos.y;
+    }
     const camTargetY = lerp(camera.y, pos.y, CONFIG.CAM.yLag);
     camera.x = lerp(camera.x, camTargetX, CONFIG.CAM.xLag);
     camera.y = camTargetY;
@@ -2021,15 +2220,18 @@
   }
 
   function onCrash() {
-    lives--;
-    if (lives > 0) {
+    const ignoreLives = CONFIG.DEBUG === true;
+    if (!ignoreLives) {
+      lives--;
+    }
+    if (ignoreLives || lives > 0) {
       // Respawn
       const cp = currentCheckpoint;
       const y = cp.y + 0.6;
       // Ensure terrain ahead of checkpoint exists to avoid empty forward
       terrain.ensureAhead(cp.x + 80, maxXReached);
       // Remove existing bike
-      bike.destroy();
+      if (bike) bike.destroy();
       // Nudge slightly behind the checkpoint to avoid spawning exactly on a lip
       const xSpawn = cp.x - 0.3;
       bike = new Bike(world, { x: xSpawn, y: y });
@@ -2073,6 +2275,39 @@
     saveScoreBtn.classList.add('hidden');
     renderLeaderboard(); // update
     setState(STATE.LEADERBOARD);
+  }
+
+  // Debug teleport helpers: compute ground height and respawn bike at new X
+  function groundYAt(x) {
+    for (const ch of terrain.chunks) {
+      for (const g of ch.gfx) {
+        const pts = g.pts;
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i];
+          if (x >= a.x && x <= b.x) {
+            const t = (x - a.x) / Math.max(1e-6, (b.x - a.x));
+            return a.y + (b.y - a.y) * t;
+          }
+        }
+      }
+    }
+    return terrain.sampleHeight(x);
+  }
+
+  function teleportToX(x) {
+    if (!world || !terrain) return;
+    terrain.ensureAhead(x + 120, maxXReached);
+    // Choose a safe point near x when possible
+    let chunk = null;
+    for (const ch of terrain.chunks) { if (x >= ch.xStart && x <= ch.xEnd) { chunk = ch; break; } }
+    const cp = chunk ? (terrain.findSafePointNearX(chunk, x) || { x, y: groundYAt(x) + 0.3 }) : { x, y: groundYAt(x) + 0.3 };
+    currentCheckpoint = cp;
+    if (bike) bike.destroy();
+    bike = new Bike(world, { x: cp.x, y: cp.y + 0.6 });
+    motorTarget = 0;
+    bike.invulnTimer = CONFIG.INVULN_TIME;
+    camera.x = bike.getPos().x + CONFIG.CAM.lookAhead;
+    camera.y = bike.getPos().y;
   }
 
   function render() {
