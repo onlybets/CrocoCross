@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Moto 2D - Endless Runner</title>
+  <title>CrocoCross - Endless Runner</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="assets/favicon.png" type="image/png" />
   <!-- Planck.js (Box2D port) -->
@@ -449,13 +449,15 @@
       MOTOR: {
         // Clean, snappy, progressive drive params
         maxTorque: 90.0,
-        speedLimit: 32.0,   // faster top speed
+        speedLimit: 48.0,   // faster top speed
         ACCEL: 28.0,        // rad/s^2 forward build-up (per second)
         BRAKE: 26.0,        // rad/s^2 toward 0 when flipping
         EPS: 0.25,          // near-zero dead-band for flip detection
-        epsNoBrake: 0.25    // slack for “never brake on re-throttle”
+        epsNoBrake: 0.45,   // slack for “never brake on re-throttle”
+        LAUNCH_TORQUE: 7.0, // softer torque < LAUNCH_SPEED (very gentle)
+        LAUNCH_SPEED: 50.0    // soft-launch up to ~18 km/h
       },
-      CHASSIS_TILT_TORQUE: 30.0,
+      CHASSIS_TILT_TORQUE: 40.0,
       SPRITE: {
         path: 'assets/img/crococross-player.png',
         widthMeters: 2.4,
@@ -2141,8 +2143,9 @@
       bike.frontJoint.enableMotor(false);
       // tilt only in air
       if (airborne) {
-        if (keys.left) bike.applyTiltTorque(-1, true);
+        // Consistent mapping: Right = lean back (nose-up), Left = lean forward (nose-down)
         if (keys.right) bike.applyTiltTorque(+1, true);
+        if (keys.left)  bike.applyTiltTorque(-1, true);
       }
     } else {
       // ---- DRIVE ----
@@ -2166,8 +2169,10 @@
         motorTarget = wAvg;
       }
 
-      bike.rearJoint.setMaxMotorTorque && bike.rearJoint.setMaxMotorTorque(M.maxTorque || 90.0);
-      bike.frontJoint.setMaxMotorTorque && bike.frontJoint.setMaxMotorTorque(M.maxTorque || 90.0);
+      const launch = Math.abs(wAvg) < ((M.LAUNCH_SPEED !== undefined) ? M.LAUNCH_SPEED : 4.0);
+      const torqueNow = launch ? ((M.LAUNCH_TORQUE !== undefined) ? M.LAUNCH_TORQUE : 26.0) : (M.maxTorque || 90.0);
+      bike.rearJoint.setMaxMotorTorque && bike.rearJoint.setMaxMotorTorque(torqueNow);
+      bike.frontJoint.setMaxMotorTorque && bike.frontJoint.setMaxMotorTorque(torqueNow);
       bike.setMotorSpeed(motorTarget);   // truly unclamped
     }
 
