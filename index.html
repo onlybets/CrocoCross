@@ -457,6 +457,15 @@
         LAUNCH_TORQUE: 7.0, // softer torque < LAUNCH_SPEED (very gentle)
         LAUNCH_SPEED: 50.0    // soft-launch up to ~18 km/h
       },
+      TILT: {
+        SIGN: 1,            // Right = back (nose-up), Left = forward (nose-down). Flip to -1 if your build is inverted.
+        BASE: 16.0,         // Nm baseline when key just pressed (in air)
+        ACCEL: 140.0,       // Nm/s added while key is held (ramp up)
+        MAX: 120.0,         // Nm cap
+        DECAY: 180.0,       // Nm/s decay toward 0 when released or grounded
+        HYSTERESIS_MS: 70,  // ms air/ground hysteresis to avoid flicker
+        GROUND_SCALE: 0.3   // if ever applying tilt on ground, scale it down
+      },
       CHASSIS_TILT_TORQUE: 40.0,
       SPRITE: {
         path: 'assets/img/crococross-player.png',
@@ -1677,18 +1686,48 @@
       this.rearJoint = rearJoint;
       this.frontJoint = frontJoint;
 
-      // Collision logic: helmet or chassis touching ground => crash
+      // Ground contact flags + air/tilt state
+      this.frontOnGround = false;
+      this.rearOnGround  = false;
+      this.airState = 'GROUND'; // 'GROUND' | 'AIR'
+      this.airTimer = 0;        // ms accumulator for hysteresis
+      this.tiltMag = 0;         // Nm magnitude ramp
+      this.tiltAxis = 0;        // -1 (left/forward) | 0 | +1 (right/back)
+
+      // Collision + wheel/ground contact flags
       const self = this;
       world.on('begin-contact', function(c) {
-        const a = c.getFixtureA().getUserData();
-        const b = c.getFixtureB().getUserData();
+        const fa = c.getFixtureA(), fb = c.getFixtureB();
+        const a = fa && fa.getUserData ? fa.getUserData() : null;
+        const b = fb && fb.getUserData ? fb.getUserData() : null;
         if (!a || !b) return;
-        if (self.invulnTimer > 0) return;
 
+        // Wheel-ground flags (do NOT gate on invuln)
+        if ((a.type === 'wheel' && b.type === 'ground') || (b.type === 'wheel' && a.type === 'ground')) {
+          const wheel = (a.type === 'wheel') ? a : b;
+          if (wheel.which === 'rear')  self.rearOnGround = true;
+          if (wheel.which === 'front') self.frontOnGround = true;
+        }
+
+        // Crash detection (respect invulnerability timer)
+        if (self.invulnTimer > 0) return;
         const types = [a.type, b.type];
         if ((types.includes('helmet') && types.includes('ground')) ||
             (types.includes('chassis') && types.includes('ground'))) {
           self.dead = true;
+        }
+      });
+
+      world.on('end-contact', function(c) {
+        const fa = c.getFixtureA(), fb = c.getFixtureB();
+        const a = fa && fa.getUserData ? fa.getUserData() : null;
+        const b = fb && fb.getUserData ? fb.getUserData() : null;
+        if (!a || !b) return;
+
+        if ((a.type === 'wheel' && b.type === 'ground') || (b.type === 'wheel' && a.type === 'ground')) {
+          const wheel = (a.type === 'wheel') ? a : b;
+          if (wheel.which === 'rear')  self.rearOnGround = false;
+          if (wheel.which === 'front') self.frontOnGround = false;
         }
       });
     }
@@ -1715,12 +1754,8 @@
     }
 
     isAirborne() {
-      // heuristic: both wheels in air (low normal force). Approx by contact count
-      // Simpler: check y difference vs ground height not available, fallback to velocity.y and body contact list complexity.
-      // We'll use a simple heuristic: if either wheel's contact list is null -> airborne-ish
-      const hasRearContacts = !!this.rear.m_contactList;
-      const hasFrontContacts = !!this.front.m_contactList;
-      return !(hasRearContacts || hasFrontContacts);
+      // Robust: driven by wheel contact flags with hysteresis (updated in fixedUpdate)
+      return this.airState === 'AIR';
     }
 
     destroy() {
@@ -2127,7 +2162,16 @@
 
   function fixedUpdate(dt) {
     // Clean, snappy, progressive drive (single ramp on motorTarget)
-    const airborne = bike.isAirborne();
+    // Update airborne state via wheel contact flags + hysteresis
+    {
+      const touching = (bike.frontOnGround || bike.rearOnGround);
+      const H = (CONFIG.BIKE.TILT && CONFIG.BIKE.TILT.HYSTERESIS_MS) ? CONFIG.BIKE.TILT.HYSTERESIS_MS : 70;
+      if (touching) bike.airTimer = Math.max(0, bike.airTimer - dt * 1000);
+      else bike.airTimer = Math.min(1000, bike.airTimer + dt * 1000);
+      if (bike.airState === 'GROUND' && !touching && bike.airTimer >= H) bike.airState = 'AIR';
+      if (bike.airState === 'AIR' && touching && bike.airTimer <= 0) bike.airState = 'GROUND';
+    }
+    const airborne = (bike.airState === 'AIR');
     const dirFwd = -1; // negative motor speed drives right with current joint orientation
     const M = CONFIG.BIKE.MOTOR;
     const axis = (keys.right ? 1 : 0) + (keys.left ? -1 : 0); // +1 forward, -1 reverse
@@ -2143,9 +2187,31 @@
       bike.frontJoint.enableMotor(false);
       // tilt only in air
       if (airborne) {
-        // Consistent mapping: Right = lean back (nose-up), Left = lean forward (nose-down)
-        if (keys.right) bike.applyTiltTorque(+1, true);
-        if (keys.left)  bike.applyTiltTorque(-1, true);
+        // Progressive airborne tilt with ramp and fixed mapping (Right=back/nose-up, Left=forward/nose-down)
+        const T = (CONFIG.BIKE.TILT || {});
+        const sign = (typeof T.SIGN === 'number') ? T.SIGN : 1;
+        const axisTilt = (keys.right ? 1 : 0) + (keys.left ? -1 : 0);
+        const desiredAxis = Math.sign(axisTilt);
+
+        if (desiredAxis !== 0) {
+          const ACC = (typeof T.ACCEL === 'number') ? T.ACCEL : 140.0;
+          const MAX = (typeof T.MAX === 'number') ? T.MAX : 120.0;
+          bike.tiltMag = Math.min(MAX, bike.tiltMag + ACC * dt);
+        } else {
+          const DEC = (typeof T.DECAY === 'number') ? T.DECAY : 180.0;
+          bike.tiltMag = Math.max(0, bike.tiltMag - DEC * dt);
+        }
+
+        if (bike.tiltMag > 0) {
+          const BASE = (typeof T.BASE === 'number') ? T.BASE : 16.0;
+          const torque = (BASE + bike.tiltMag) * (desiredAxis * sign);
+          bike.chassis.applyTorque(torque, true);
+        }
+      } else {
+        // Not airborne: decay tilt magnitude quickly
+        const T = (CONFIG.BIKE.TILT || {});
+        const DEC = (typeof T.DECAY === 'number') ? T.DECAY : 180.0;
+        bike.tiltMag = Math.max(0, bike.tiltMag - DEC * dt);
       }
     } else {
       // ---- DRIVE ----
