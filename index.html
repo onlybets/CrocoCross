@@ -446,7 +446,15 @@
       WHEEL:   { r: 0.45, density: 1.0, friction: 1.7, restitution: 0.0 },
       HELMET:  { r: 0.20 },
       HUBS:    { rearOffsetX: -0.75, frontOffsetX: 0.85, hubY: -0.30 },
-      MOTOR:   { maxTorque: 80.0, speedLimit: 22.0, accelRate: 10.0, brakeRate: 18.0, coastRate: 6.0 }, // rad/s cap (reduced) + rates
+      MOTOR: {
+        // Clean, snappy, progressive drive params
+        maxTorque: 90.0,
+        speedLimit: 32.0,   // faster top speed
+        ACCEL: 28.0,        // rad/s^2 forward build-up (per second)
+        BRAKE: 26.0,        // rad/s^2 toward 0 when flipping
+        EPS: 0.25,          // near-zero dead-band for flip detection
+        epsNoBrake: 0.25    // slack for “never brake on re-throttle”
+      },
       CHASSIS_TILT_TORQUE: 30.0,
       SPRITE: {
         path: 'assets/img/crococross-player.png',
@@ -1684,10 +1692,9 @@
     }
 
     setMotorSpeed(speed) {
-      const limit = CONFIG.BIKE.MOTOR.speedLimit;
-      const clamped = Math.max(-limit, Math.min(limit, speed));
-      this.rearJoint.setMotorSpeed(clamped);
-      this.frontJoint.setMotorSpeed(clamped);
+      // Do not clamp here; clamping causes counter-torque (engine braking) on re-throttle
+      this.rearJoint.setMotorSpeed(speed);
+      this.frontJoint.setMotorSpeed(speed);
     }
 
     applyTiltTorque(dir, airborne) {
@@ -1933,6 +1940,8 @@
   let currentCheckpoint = { x: 0, y: 0 };
   let camera = { x: 0, y: 0 };
   let motorTarget = 0;
+  let lastAxis = 0;
+  let motorsEnabled = false;
 
   // Image clouds (deterministic)
   const clouds = [];
@@ -2115,33 +2124,55 @@
   }
 
   function fixedUpdate(dt) {
-    // Progressive controls (→ accelerate, ← brake/reverse; in air keys tilt)
+    // Clean, snappy, progressive drive (single ramp on motorTarget)
     const airborne = bike.isAirborne();
     const dirFwd = -1; // negative motor speed drives right with current joint orientation
     const M = CONFIG.BIKE.MOTOR;
+    const axis = (keys.right ? 1 : 0) + (keys.left ? -1 : 0); // +1 forward, -1 reverse
 
-    if (airborne) {
-      // Hold motor; tilt only (invert mapping to keep behavior consistent when leaving ground)
-      if (keys.left) bike.applyTiltTorque(-1, true);   // tilt back
-      if (keys.right) bike.applyTiltTorque(+1, true);  // tilt forward
-    } else {
-      if (keys.right) {
-        // accelerate progressively toward forward cap
-        motorTarget = approach(motorTarget, dirFwd * M.speedLimit, M.accelRate * dt);
-      } else if (keys.left) {
-        // braking: move toward 0 quickly, then reverse if held
-        if (Math.sign(motorTarget) === dirFwd || motorTarget === 0) {
-          motorTarget = approach(motorTarget, 0, M.brakeRate * dt);
-        } else {
-          motorTarget = approach(motorTarget, -dirFwd * M.speedLimit, M.accelRate * dt);
-        }
-      } else {
-        // coasting decays toward 0 gently
-        motorTarget = approach(motorTarget, 0, M.coastRate * dt);
+    // Read wheel speeds
+    const wR = bike.rear.getAngularVelocity ? bike.rear.getAngularVelocity() : 0;
+    const wF = bike.front.getAngularVelocity ? bike.front.getAngularVelocity() : 0;
+    const wAvg = 0.5 * (wR + wF);
+
+    if (airborne || axis === 0) {
+      // ---- COAST / AIR ----
+      bike.rearJoint.enableMotor(false);
+      bike.frontJoint.enableMotor(false);
+      // tilt only in air
+      if (airborne) {
+        if (keys.left) bike.applyTiltTorque(-1, true);
+        if (keys.right) bike.applyTiltTorque(+1, true);
       }
+    } else {
+      // ---- DRIVE ----
+      bike.rearJoint.enableMotor(true);
+      bike.frontJoint.enableMotor(true);
+
+      // progressive target toward cap (or toward 0 when flipping)
+      const desiredCap = (axis > 0 ? dirFwd : -dirFwd) * (M.speedLimit || 32.0);
+      const targetSign = axis * dirFwd; // sign of desired motor direction
+      const sameDir = (Math.sign(motorTarget || 0) === Math.sign(targetSign)) || Math.abs(motorTarget) < (M.EPS || 0.25);
+      const step = ((sameDir ? (M.ACCEL || 28.0) : (M.BRAKE || 26.0)) * dt);
+      const aim = sameDir ? desiredCap : 0;
+
+      // Move motorTarget toward aim
+      if (Math.abs(aim - motorTarget) <= step) motorTarget = aim;
+      else motorTarget += Math.sign(aim - motorTarget) * step;
+
+      // Never brake on re-throttle if downhill already faster
+      const epsNB = (typeof M.epsNoBrake === 'number') ? M.epsNoBrake : 0.2;
+      if ((wAvg * targetSign) > 0 && Math.abs(wAvg) > Math.abs(motorTarget) - epsNB) {
+        motorTarget = wAvg;
+      }
+
+      bike.rearJoint.setMaxMotorTorque && bike.rearJoint.setMaxMotorTorque(M.maxTorque || 90.0);
+      bike.frontJoint.setMaxMotorTorque && bike.frontJoint.setMaxMotorTorque(M.maxTorque || 90.0);
+      bike.setMotorSpeed(motorTarget);   // truly unclamped
     }
 
-    bike.setMotorSpeed(motorTarget);
+    // Remember for next step
+    lastAxis = axis;
 
     // Step physics
     world.step(dt, 8, 3);
