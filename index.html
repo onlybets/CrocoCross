@@ -289,6 +289,37 @@
       cursor: pointer;
       box-shadow: 0 4px 10px rgba(0,0,0,0.15);
     }
+    .audio-card {
+      position: absolute;
+      left: auto !important;                /* override .controls-card left */
+      right: clamp(16px, 6vw, 64px);
+      bottom: clamp(16px, 6vh, 64px);
+      width: clamp(220px, 26vw, 360px);
+      background: rgba(255,255,255,0.92);
+      border: 4px solid #333;
+      border-radius: 14px;
+      padding: 12px 14px;
+      color: #111;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      z-index: 6;                           /* sit above the background art */
+    }
+    /* Responsive layout: stack Audio above Controls on narrow screens */
+    @media (max-width: 1000px) {
+      .controls-card {
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+        width: min(92vw, 460px);
+        bottom: clamp(16px, 6vh, 64px);
+      }
+      .audio-card {
+        left: 50% !important;
+        right: auto;
+        transform: translateX(-50%);
+        width: min(90vw, 440px);
+        bottom: calc(clamp(16px, 6vh, 64px) + 180px); /* place above controls */
+      }
+    }
   </style>
 </head>
 <body>
@@ -304,7 +335,13 @@
         <div class="row"><span class="kbd">→</span><span>Accelerate / Tilt forward (air)</span></div>
         <div class="row"><span class="kbd">←</span><span>Brake/Reverse / Tilt back (air)</span></div>
         <div class="row"><span class="kbd">Esc</span><span>Pause</span></div>
-        <div class="row"><span class="badge">Music</span><button id="musicBtn" type="button" class="music-btn">Music: 1</button></div>
+      </div>
+    </div>
+    <div id="audioCard" class="controls-card audio-card">
+      <div class="controls-title">Audio</div>
+      <div class="controls-rows">
+        <div class="row"><span class="badge">Engine</span><button id="engineBtn" type="button" class="music-btn">Engine: ON</button></div>
+        <div class="row"><span class="badge">Music</span><button id="musicBtn" type="button" class="music-btn">Music: Off</button></div>
       </div>
     </div>
   </div>
@@ -436,7 +473,7 @@
 
     // Audio
     AUDIO: {
-      default: 'music1',        // 'music1' | 'music2' | 'off'
+      default: 'off',        // 'music1' | 'music2' | 'off' (default OFF per spec)
       volume: 0.5
     },
 
@@ -549,6 +586,176 @@
     applyMusic();
   }
 
+  // Engine toggle (persisted)
+  const ENGINE_KEY = 'cc_engine';
+  let engineEnabled = ((localStorage.getItem(ENGINE_KEY) ?? 'on') !== 'off');
+
+  function updateEngineUI() {
+    if (!engineBtn) return;
+    engineBtn.textContent = engineEnabled ? 'Engine: ON' : 'Engine: OFF';
+  }
+  async function applyEngine() {
+    localStorage.setItem(ENGINE_KEY, engineEnabled ? 'on' : 'off');
+    updateEngineUI();
+    // Respect current state immediately
+    if (!engineEnabled) {
+      engineMuteImmediate();
+      engineSuspendIfSafe();
+      return;
+    }
+    // Enabling: make sure graph exists and context is running
+    if (typeof window.initEngineAudio === 'function' && !EngineState) {
+      try { await window.initEngineAudio(); } catch {}
+    }
+    engineResumeIfNeeded();
+  }
+  async function toggleEngine() {
+    engineEnabled = !engineEnabled;
+    if (engineEnabled && typeof window.initEngineAudio === 'function') {
+      try { await window.initEngineAudio(); } catch {}
+    }
+    applyEngine();
+  }
+
+  // Procedural Engine Audio (Web Audio API, no assets)
+  // Public API on window: initEngineAudio(), updateEngineAudio(dt, telem)
+  // telem: { airborne:boolean, wAvg:number, motorTarget:number, axis:-1|0|+1, speed_mps?:number }
+  let EngineAC = null;
+  let EngineState = null;
+
+  function makeDistCurve(amount = 6) {
+    const n = 1024, curve = new Float32Array(n), k = amount;
+    for (let i = 0; i < n; i++) {
+      const x = i * 2 / n - 1;
+      curve[i] = (1 + k) * x / (1 + k * Math.abs(x));
+    }
+    return curve;
+  }
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+  async function initEngineAudio() {
+    try {
+      if (EngineState) return;
+      const AC = new (window.AudioContext || window.webkitAudioContext)();
+      // Create nodes
+      const osc1 = AC.createOscillator(); osc1.type = 'sawtooth';
+      const osc2 = AC.createOscillator(); osc2.type = 'sawtooth'; osc2.detune.value = +7; // cents
+      const oscSub = AC.createOscillator(); oscSub.type = 'square';
+
+      const subGain = AC.createGain(); subGain.gain.value = 0.06; // subtle body
+      const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1200;
+      const sh = AC.createWaveShaper(); sh.curve = makeDistCurve(6);
+      const engGain = AC.createGain(); engGain.gain.value = 0.0;
+
+      // Simple compressor for headroom
+      const comp = AC.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.knee.value = 24; comp.ratio.value = 4;
+      comp.attack.value = 0.005; comp.release.value = 0.08;
+
+      // Wind layer (simple sine; can be replaced by noise later)
+      const windOsc = AC.createOscillator(); windOsc.type = 'sine';
+      const windGain = AC.createGain(); windGain.gain.value = 0.0;
+
+      // Wiring
+      // Engine: (osc1 + osc2 + sub) -> LP -> Shaper -> engGain
+      osc1.connect(lp);
+      osc2.connect(lp);
+      oscSub.connect(subGain); subGain.connect(lp);
+      lp.connect(sh); sh.connect(engGain);
+      // Wind: windOsc -> windGain ->
+      windOsc.connect(windGain);
+      // Mixdown: (engGain + windGain) -> comp -> destination
+      engGain.connect(comp);
+      windGain.connect(comp);
+      comp.connect(AC.destination);
+
+      const now = AC.currentTime;
+      osc1.start(now); osc2.start(now); oscSub.start(now);
+      windOsc.start(now);
+
+      EngineAC = AC;
+      EngineState = {
+        rpm: 1500,
+        osc1, osc2, oscSub,
+        subGain, lp, sh, engGain,
+        windOsc, windGain
+      };
+      // expose for other modules
+      window.EngineAudio = { initEngineAudio, updateEngineAudio, isReady: () => !!EngineState };
+      // Attempt resume in case context was created in a gesture callback that still needs resume
+      if (AC.state === 'suspended') { try { await AC.resume(); } catch {} }
+    } catch (e) {
+      console.warn('Engine audio init failed:', e);
+    }
+  }
+
+  function updateEngineAudio(dt, telem) {
+    if (!EngineState || !EngineAC) return;
+    const AC = EngineAC;
+    const S = EngineState;
+    const { airborne, wAvg, motorTarget, axis, speed_mps = 0 } = telem || {};
+
+    // RPM model
+    const RPM_IDLE = 1500, RPM_RED = 9000;
+    const wheelRpm = Math.abs(wAvg || 0) * 9.5493;
+    let rpmTarget;
+
+    if (airborne) {
+      rpmTarget = clamp(Math.max(RPM_IDLE, Math.abs(motorTarget || 0) * 9.5493) * 1.12, RPM_IDLE, RPM_RED);
+    } else if ((axis | 0) !== 0) {
+      rpmTarget = clamp(Math.max(wheelRpm, Math.abs(motorTarget || 0) * 9.5493), RPM_IDLE, RPM_RED);
+    } else {
+      rpmTarget = RPM_IDLE;
+    }
+
+    // One-pole smoothing
+    const a = 1 - Math.exp(-dt / 0.09);
+    S.rpm += (rpmTarget - S.rpm) * a;
+
+    // Map RPM -> frequency
+    const norm = clamp((S.rpm - RPM_IDLE) / (RPM_RED - RPM_IDLE), 0, 1);
+    const f0 = 40 + 320 * norm;
+    const t = AC.currentTime;
+    S.osc1.frequency.setTargetAtTime(f0, t, 0.02);
+    S.osc2.frequency.setTargetAtTime(f0, t, 0.02);
+    S.oscSub.frequency.setTargetAtTime(f0 * 0.5, t, 0.02);
+
+    // Loudness and filter opening
+    const throttle = ((axis | 0) !== 0) ? 1 : 0;
+    const vol = clamp(0.30 + 0.40 * throttle + 0.25 * norm, 0, 1) * (airborne ? 0.85 : 1.0);
+    S.engGain.gain.setTargetAtTime(vol, t, 0.03);
+    S.lp.frequency.setTargetAtTime(900 + 2600 * norm, t, 0.05);
+
+    // Wind gain by speed, slight bump in air
+    const wVol = clamp(speed_mps * 0.01, 0, 0.25) + (airborne ? 0.05 : 0.0);
+    S.windGain.gain.setTargetAtTime(wVol, t, 0.10);
+    S.windOsc.frequency.setTargetAtTime(120 + 140 * norm, t, 0.05);
+  }
+
+  // Expose on window so UI/integration can call post-gesture
+  window.initEngineAudio = initEngineAudio;
+  window.updateEngineAudio = updateEngineAudio;
+
+  // Engine audio helpers for lifecycle gating
+  function engineMuteImmediate() {
+    try {
+      if (EngineState && EngineAC) {
+        EngineState.engGain.gain.setValueAtTime(0, EngineAC.currentTime);
+      }
+    } catch {}
+  }
+  function engineSuspendIfSafe() {
+    try {
+      if (EngineAC && EngineAC.state === 'running') EngineAC.suspend();
+    } catch {}
+  }
+  function engineResumeIfNeeded() {
+    try {
+      if (EngineAC && EngineAC.state === 'suspended') EngineAC.resume();
+    } catch {}
+  }
+
   // Collision categories
   const CAT = {
     GROUND: 0x0001,
@@ -566,6 +773,7 @@
   const hudSpeed = document.getElementById('hudSpeed');
   const hudLives = document.getElementById('hudLives');
   const musicBtn = document.getElementById('musicBtn');
+  const engineBtn = document.getElementById('engineBtn');
 
   const menu = document.getElementById('menu');
   const playBtn = document.getElementById('playBtn');
@@ -2077,11 +2285,16 @@
   });
 
   // UI handlers
-  playBtn.onclick = () => { unlockAndPlay(); startNewGame(); };
+  playBtn.onclick = () => {
+    unlockAndPlay();
+    if (engineEnabled && window.initEngineAudio) { try { window.initEngineAudio(); } catch {} }
+    startNewGame();
+  };
   leaderboardBtn.onclick = () => { showLeaderboard(); };
   lbBackBtn.onclick = () => { setState(STATE.MENU); };
   saveScoreBtn.onclick = () => { submitScoreAndHide(); };
   if (musicBtn) { updateMusicUI(); musicBtn.onclick = () => { unlockAndPlay(); toggleMusic(); }; }
+  if (engineBtn) { updateEngineUI(); engineBtn.onclick = () => { unlockAndPlay(); toggleEngine(); }; }
   nameInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       submitScoreAndHide();
@@ -2113,6 +2326,23 @@
       hudBox.style.display = '';
     } else {
       hudBox.style.display = 'none';
+    }
+
+    // Engine audio lifecycle: only active during PLAYING and when enabled
+    if (s === STATE.PLAYING) {
+      if (engineEnabled) {
+        if (typeof window.initEngineAudio === 'function' && !EngineState) {
+          try { window.initEngineAudio(); } catch {}
+        }
+        engineResumeIfNeeded();
+      } else {
+        engineMuteImmediate();
+        engineSuspendIfSafe();
+      }
+    } else {
+      // Any non-playing state: mute and suspend to save CPU
+      engineMuteImmediate();
+      engineSuspendIfSafe();
     }
     if (s === STATE.GAMEOVER) {
       // Do not auto-hide the name prompt here; onCrash() controls its visibility.
@@ -2157,6 +2387,21 @@
     for (let i = 0; i < steps; i++) {
       fixedUpdate(fixedDt);
       accumulator -= fixedDt;
+    }
+
+    // Update procedural engine audio (only while playing; requires prior init after user gesture)
+    if (state === STATE.PLAYING && engineEnabled && typeof window.updateEngineAudio === 'function') {
+      // Telemetry
+      const airborne = (bike.airState === 'AIR');
+      const wR = bike.rear.getAngularVelocity ? bike.rear.getAngularVelocity() : 0;
+      const wF = bike.front.getAngularVelocity ? bike.front.getAngularVelocity() : 0;
+      const wAvg = 0.5 * (wR + wF);
+      const axis = Math.sign((keys.right ? 1 : 0) + (keys.left ? -1 : 0));
+      const v = bike.getVel();
+      const speed_mps = Math.abs(v.x);
+      try {
+        window.updateEngineAudio(dt, { airborne, wAvg, motorTarget, axis, speed_mps });
+      } catch {}
     }
     // Render at end
   }
