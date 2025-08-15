@@ -449,7 +449,7 @@
       MOTOR: {
         // Clean, snappy, progressive drive params
         maxTorque: 90.0,
-        speedLimit: 48.0,   // faster top speed
+        speedLimit: 90.0,   // faster top speed
         ACCEL: 28.0,        // rad/s^2 forward build-up (per second)
         BRAKE: 26.0,        // rad/s^2 toward 0 when flipping
         EPS: 0.25,          // near-zero dead-band for flip detection
@@ -459,12 +459,12 @@
       },
       TILT: {
         SIGN: 1,            // Right = back (nose-up), Left = forward (nose-down). Flip to -1 if your build is inverted.
-        BASE: 16.0,         // Nm baseline when key just pressed (in air)
-        ACCEL: 140.0,       // Nm/s added while key is held (ramp up)
-        MAX: 120.0,         // Nm cap
-        DECAY: 180.0,       // Nm/s decay toward 0 when released or grounded
-        HYSTERESIS_MS: 70,  // ms air/ground hysteresis to avoid flicker
-        GROUND_SCALE: 0.3   // if ever applying tilt on ground, scale it down
+        BASE: 8.0,          // gentler initial “impulse” in air
+        ACCEL: 70.0,        // slower build for smoother tilt
+        MAX: 20.0,          // lower cap for smoother feel
+        DECAY: 110.0,       // gentler release
+        HYSTERESIS_MS: 80,  // a bit higher to avoid flicker near lips
+        GROUND_SCALE: 0.0   // no tilt when grounded
       },
       CHASSIS_TILT_TORQUE: 40.0,
       SPRITE: {
@@ -1690,7 +1690,8 @@
       this.frontOnGround = false;
       this.rearOnGround  = false;
       this.airState = 'GROUND'; // 'GROUND' | 'AIR'
-      this.airTimer = 0;        // ms accumulator for hysteresis
+      this.airAirMs = 0;        // ms accumulated with both wheels off
+      this.airGroundMs = 0;     // ms accumulated with any wheel touching
       this.tiltMag = 0;         // Nm magnitude ramp
       this.tiltAxis = 0;        // -1 (left/forward) | 0 | +1 (right/back)
 
@@ -2164,12 +2165,21 @@
     // Clean, snappy, progressive drive (single ramp on motorTarget)
     // Update airborne state via wheel contact flags + hysteresis
     {
-      const touching = (bike.frontOnGround || bike.rearOnGround);
-      const H = (CONFIG.BIKE.TILT && CONFIG.BIKE.TILT.HYSTERESIS_MS) ? CONFIG.BIKE.TILT.HYSTERESIS_MS : 70;
-      if (touching) bike.airTimer = Math.max(0, bike.airTimer - dt * 1000);
-      else bike.airTimer = Math.min(1000, bike.airTimer + dt * 1000);
-      if (bike.airState === 'GROUND' && !touching && bike.airTimer >= H) bike.airState = 'AIR';
-      if (bike.airState === 'AIR' && touching && bike.airTimer <= 0) bike.airState = 'GROUND';
+      // Strict gating: AIR only when BOTH wheels are off the ground, with hysteresis
+      const Tt = (CONFIG.BIKE.TILT || {});
+      const H = (typeof Tt.HYSTERESIS_MS === 'number') ? Tt.HYSTERESIS_MS : 80;
+      const bothOff = (!bike.frontOnGround && !bike.rearOnGround);
+
+      if (bothOff) {
+        bike.airAirMs = Math.min(999, bike.airAirMs + dt * 1000);
+        bike.airGroundMs = 0;
+      } else {
+        bike.airGroundMs = Math.min(999, bike.airGroundMs + dt * 1000);
+        bike.airAirMs = 0;
+      }
+
+      if (bike.airState === 'GROUND' && bothOff && bike.airAirMs >= H) bike.airState = 'AIR';
+      if (bike.airState === 'AIR' && !bothOff && bike.airGroundMs >= H) bike.airState = 'GROUND';
     }
     const airborne = (bike.airState === 'AIR');
     const dirFwd = -1; // negative motor speed drives right with current joint orientation
@@ -2185,32 +2195,30 @@
       // ---- COAST / AIR ----
       bike.rearJoint.enableMotor(false);
       bike.frontJoint.enableMotor(false);
-      // tilt only in air
+      // tilt only in AIR (strict both-wheels-off). No ground tilt.
       if (airborne) {
-        // Progressive airborne tilt with ramp and fixed mapping (Right=back/nose-up, Left=forward/nose-down)
         const T = (CONFIG.BIKE.TILT || {});
         const sign = (typeof T.SIGN === 'number') ? T.SIGN : 1;
-        const axisTilt = (keys.right ? 1 : 0) + (keys.left ? -1 : 0);
-        const desiredAxis = Math.sign(axisTilt);
+        const axis = Math.sign((keys.right ? 1 : 0) + (keys.left ? -1 : 0));
 
-        if (desiredAxis !== 0) {
-          const ACC = (typeof T.ACCEL === 'number') ? T.ACCEL : 140.0;
-          const MAX = (typeof T.MAX === 'number') ? T.MAX : 120.0;
-          bike.tiltMag = Math.min(MAX, bike.tiltMag + ACC * dt);
+        if (axis !== 0) {
+          const MAX = (typeof T.MAX === 'number') ? T.MAX : 90.0;
+          const ACC = (typeof T.ACCEL === 'number') ? T.ACCEL : 70.0;
+          const BASE = (typeof T.BASE === 'number') ? T.BASE : 8.0;
+          const gain = ACC * (1 - (bike.tiltMag / Math.max(1e-6, MAX))); // easing as we approach MAX
+          bike.tiltMag = Math.min(MAX, bike.tiltMag + (gain + BASE) * dt);
         } else {
-          const DEC = (typeof T.DECAY === 'number') ? T.DECAY : 180.0;
+          const DEC = (typeof T.DECAY === 'number') ? T.DECAY : 110.0;
           bike.tiltMag = Math.max(0, bike.tiltMag - DEC * dt);
         }
 
         if (bike.tiltMag > 0) {
-          const BASE = (typeof T.BASE === 'number') ? T.BASE : 16.0;
-          const torque = (BASE + bike.tiltMag) * (desiredAxis * sign);
+          const torque = bike.tiltMag * (axis * sign);
           bike.chassis.applyTorque(torque, true);
         }
       } else {
-        // Not airborne: decay tilt magnitude quickly
         const T = (CONFIG.BIKE.TILT || {});
-        const DEC = (typeof T.DECAY === 'number') ? T.DECAY : 180.0;
+        const DEC = (typeof T.DECAY === 'number') ? T.DECAY : 110.0;
         bike.tiltMag = Math.max(0, bike.tiltMag - DEC * dt);
       }
     } else {
