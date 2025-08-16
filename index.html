@@ -64,6 +64,7 @@
       transition: transform 0.07s ease, background 0.2s ease;
     }
     button:hover { background: #ffd75f; }
+    .play-big:hover { background: #2EE66B; }
     button:active { filter: brightness(0.95); }
     button[disabled] { opacity: 0.5; cursor: not-allowed; filter: grayscale(0.2); }
     .caption {
@@ -135,6 +136,45 @@
       color: #222;
       text-shadow: 1px 1px 0 #fff;
     }
+    /* Right-side HUD box for scores */
+    .hudbox-right {
+      position: absolute;
+      right: 12px;
+      top: 10px;
+      left: auto;
+    }
+    /* Speed progress bar */
+    .hudbar {
+      width: 180px;
+      height: 12px;
+      background: #eee;
+      border: 2px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+      margin: 4px 2px 6px 2px;
+    }
+    .hudbar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #82d6ff, #2eb3ff);
+    }
+    /* Flip popup (toast) */
+    .flip-popup {
+      position: absolute;
+      left: 50%;
+      top: 18%;
+      transform: translateX(-50%);
+      background: rgba(255,255,255,0.95);
+      border: 4px solid #333;
+      border-radius: 14px;
+      padding: 8px 12px;
+      color: #102a43;
+      font-weight: 900;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+      pointer-events: none;
+      z-index: 7;
+      transition: opacity 0.15s ease;
+    }
     .leaderboard {
       width: 440px;
       margin: 0 auto;
@@ -147,7 +187,7 @@
     }
     .lb-row {
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-columns: 1.3fr 1fr 1fr 1fr; /* Name | Distance | Flip | Total */
       gap: 8px;
       padding: 6px 0;
       border-bottom: 1px dashed #ccc;
@@ -369,10 +409,18 @@
   </div>
 
   <div id="hudBox" class="hudbox">
-    <div class="hudline"><span class="hudlabel">Distance</span><span id="hudDist">0 m</span></div>
     <div class="hudline"><span class="hudlabel">Speed</span><span id="hudSpeed">0 km/h</span></div>
-    <div class="hudline"><span class="hudlabel">Lives</span><span id="hudLives">5/5</span></div>
+    <div class="hudbar" id="hudSpeedBar"><div class="hudbar-fill" id="hudSpeedFill" style="width: 0%"></div></div>
+    <div class="hudline"><span class="hudlabel">Lives</span><span id="hudLives"></span></div>
   </div>
+
+  <div id="scoreBox" class="hudbox hudbox-right">
+    <div class="hudline"><span class="hudlabel">Distance</span><span id="scoreDist">0</span></div>
+    <div class="hudline"><span class="hudlabel">Flip</span><span id="scoreFlip">0</span></div>
+    <div class="hudline"><span class="hudlabel">Total</span><span id="scoreTotal">0</span></div>
+  </div>
+
+  <div id="flipPopup" class="flip-popup" style="display: none; opacity: 0"></div>
 
 <script>
 (() => {
@@ -486,7 +534,7 @@
       MOTOR: {
         // Clean, snappy, progressive drive params
         maxTorque: 90.0,
-        speedLimit: 90.0,   // faster top speed
+        speedLimit: 140.0,   // faster top speed
         ACCEL: 28.0,        // rad/s^2 forward build-up (per second)
         BRAKE: 26.0,        // rad/s^2 toward 0 when flipping
         EPS: 0.25,          // near-zero dead-band for flip detection
@@ -531,6 +579,21 @@
     INVULN_TIME: 1.0,       // seconds after respawn
     DEBUG: false
   };
+
+  // Flip counting config (added outside of CONFIG to avoid touching existing object literal)
+  CONFIG.SCORE = CONFIG.SCORE || {};
+  CONFIG.SCORE.LOOPS = {
+    INV_ON_DEG: 150,        // enter inverted cone
+    INV_OFF_DEG: 130,       // exit inverted cone
+    LAND_HYSTERESIS_MS: 50  // confirm both wheels ON before awarding
+  };
+
+  const RAD = Math.PI / 180;
+  const INV_ON  = Math.cos(CONFIG.SCORE.LOOPS.INV_ON_DEG  * RAD); // ~ -0.866
+  const INV_OFF = Math.cos(CONFIG.SCORE.LOOPS.INV_OFF_DEG * RAD); // ~ -0.643
+
+  // HUD config
+  CONFIG.HUD = CONFIG.HUD || { SPEED_MAX_KMH: 120, POPUP_MS: 3000 };
 
   // Rider sprite asset
   const riderImg = new Image();
@@ -769,9 +832,13 @@
   let VIEW_W = window.innerWidth;
   let VIEW_H = window.innerHeight;
   const hudBox = document.getElementById('hudBox');
-  const hudDist = document.getElementById('hudDist');
   const hudSpeed = document.getElementById('hudSpeed');
   const hudLives = document.getElementById('hudLives');
+  const hudSpeedFill = document.getElementById('hudSpeedFill');
+  const scoreDistEl = document.getElementById('scoreDist');
+  const scoreFlipEl = document.getElementById('scoreFlip');
+  const scoreTotalEl = document.getElementById('scoreTotal');
+  const flipPopup = document.getElementById('flipPopup');
   const musicBtn = document.getElementById('musicBtn');
   const engineBtn = document.getElementById('engineBtn');
 
@@ -2113,6 +2180,39 @@
     return Math.max(target, current - maxDelta);
   }
 
+  // Screen helpers for UI anchoring
+  function worldToScreenXUI(x) {
+    return Math.round(VIEW_W * 0.5 + (x - camera.x) * CONFIG.SCALE);
+  }
+  function worldToScreenYUI(y) {
+    return Math.round(VIEW_H * 0.5 - (y - camera.y) * CONFIG.SCALE);
+  }
+
+  // Flip popup (toast) state
+  const flipToast = { active: false, start: 0, duration: CONFIG.HUD.POPUP_MS, textHTML: '' };
+
+  // Dot-product inverted detector (air-only; hysteresis)
+  function updateInvertedDetector() {
+    if (!flipSimple.air) return;
+    const theta = bike.chassis.getAngle(); // radians
+    const dot = Math.cos(theta);           // body-up · world-up
+
+    if (!flipSimple.inverted) {
+      // Try to enter inverted
+      if (dot <= INV_ON && flipSimple.armed) {
+        flipSimple.inverted = true;
+        flipSimple.armed = false;      // lock while inverted
+        flipSimple.flipCount += 1;     // COUNT 1 upside-down event
+      }
+    } else {
+      // Try to exit inverted (unlock for next count)
+      if (dot >= INV_OFF) {
+        flipSimple.inverted = false;
+        flipSimple.armed = true;
+      }
+    }
+  }
+
   // Leaderboard (localStorage)
   const LB_KEY = 'moto2d_leaderboard';
   function loadLB() {
@@ -2120,32 +2220,54 @@
       const raw = localStorage.getItem(LB_KEY);
       if (!raw) return [];
       const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) return arr;
-      return [];
+      if (!Array.isArray(arr)) return [];
+      // Migrate older entries {name, score, date} -> {name, distance, flip, total, date}
+      const migrated = arr.map((e) => {
+        if (e && typeof e === 'object' && ('total' in e)) return e;
+        if (e && typeof e === 'object' && ('score' in e)) {
+          const distance = Math.max(0, Math.floor(Number(e.score) || 0));
+          const flip = 0;
+          const total = distance;
+          return { name: e.name || '???', distance, flip, total, date: e.date };
+        }
+        return e;
+      });
+      return migrated;
     } catch { return []; }
   }
   function saveLB(list) {
     try {
-      localStorage.setItem(LB_KEY, JSON.stringify(list.slice(0, 10)));
+      // Always keep sorted by total descending before saving
+      const sorted = (Array.isArray(list) ? list.slice() : []).sort((a, b) => (Number(b?.total)||0) - (Number(a?.total)||0));
+      localStorage.setItem(LB_KEY, JSON.stringify(sorted.slice(0, 10)));
     } catch {}
   }
-  function addScore(name, score) {
+  function addScore(name, distance, flip, total) {
+    const d = Math.max(0, Math.floor(Number(distance) || 0));
+    const f = Math.max(0, Math.floor(Number(flip) || 0));
+    const t = Math.max(0, Math.floor(Number(total) || (d + f)));
     const list = loadLB();
-    list.push({ name, score, date: new Date().toISOString().slice(0,10) });
-    list.sort((a, b) => b.score - a.score);
+    list.push({ name, distance: d, flip: f, total: t, date: new Date().toISOString().slice(0,10) });
+    // Sort by total desc
+    list.sort((a, b) => (Number(b?.total)||0) - (Number(a?.total)||0));
     saveLB(list);
   }
   function renderLeaderboard() {
-    const list = loadLB();
+    const list = loadLB().slice().sort((a, b) => (Number(b?.total)||0) - (Number(a?.total)||0));
     leaderboardList.innerHTML = '';
     const header = document.createElement('div');
     header.className = 'lb-row header';
-    header.innerHTML = '<div>Name</div><div>Score</div><div>Date</div>';
+    header.style.gridTemplateColumns = '1.3fr 1fr 1fr 1fr';
+    header.innerHTML = '<div>Name</div><div>Distance</div><div>Flip</div><div>Total</div>';
     leaderboardList.appendChild(header);
     list.forEach((row, idx) => {
+      const distance = Math.max(0, Math.floor(Number(row?.distance) || 0));
+      const flip = Math.max(0, Math.floor(Number(row?.flip) || 0));
+      const total = Math.max(0, Math.floor(Number(row?.total) || (distance + flip)));
       const div = document.createElement('div');
       div.className = 'lb-row';
-      div.innerHTML = `<div>${idx + 1}. ${esc(row.name)}</div><div>${Math.floor(row.score)}</div><div>${row.date}</div>`;
+      div.style.gridTemplateColumns = '1.3fr 1fr 1fr 1fr';
+      div.innerHTML = `<div>${idx + 1}. ${esc(row?.name || '')}</div><div>${distance}</div><div>${flip}</div><div>${total}</div>`;
       leaderboardList.appendChild(div);
     });
     if (list.length === 0) {
@@ -2188,6 +2310,22 @@
   let motorTarget = 0;
   let lastAxis = 0;
   let motorsEnabled = false;
+
+  // Flip scoring accumulator
+  let scoreFlip = 0;
+
+  // Simple airborne flip detector (dot-product + hysteresis)
+  const flipSimple = {
+    air: false,            // true when BOTH wheels are off
+    inverted: false,       // inside inverted cone
+    armed: false,          // ready to count next entry into inverted
+    flipCount: 0,          // flips in current airtime
+    landArming: false,     // legacy (not used with two-touch)
+    landStartMs: 0,
+    lastCredited: 0,       // last validated flips (shown in HUD)
+    landFrontSeen: false,  // has front wheel touched since takeoff
+    landRearSeen: false    // has rear wheel touched since takeoff
+  };
 
   // Image clouds (deterministic)
   const clouds = [];
@@ -2327,6 +2465,14 @@
     } else {
       hudBox.style.display = 'none';
     }
+    {
+      const scoreBox = document.getElementById('scoreBox');
+      if (s === STATE.PLAYING || s === STATE.PAUSED) {
+        if (scoreBox) scoreBox.style.display = '';
+      } else {
+        if (scoreBox) scoreBox.style.display = 'none';
+      }
+    }
 
     // Engine audio lifecycle: only active during PLAYING and when enabled
     if (s === STATE.PLAYING) {
@@ -2402,6 +2548,25 @@
       try {
         window.updateEngineAudio(dt, { airborne, wAvg, motorTarget, axis, speed_mps });
       } catch {}
+    }
+
+    // Flip popup animation and positioning
+    if (flipToast.active && flipPopup && bike) {
+      const now = performance.now();
+      const t = Math.max(0, Math.min(1, (now - flipToast.start) / (flipToast.duration || 3000)));
+      if (t >= 1) {
+        flipToast.active = false;
+        flipPopup.style.display = 'none';
+      } else {
+        const p = bike.getPos();
+        const sx = worldToScreenXUI(p.x);
+        const sy = worldToScreenYUI(p.y + 1.2);
+        const rise = Math.round(30 * t);
+        const alpha = (1 - t);
+        flipPopup.style.left = `${sx}px`;
+        flipPopup.style.top = `${sy - 60 - rise}px`;
+        flipPopup.style.opacity = `${alpha.toFixed(2)}`;
+      }
     }
     // Render at end
   }
@@ -2501,6 +2666,68 @@
     // Step physics
     world.step(dt, 8, 3);
 
+    // Simple airborne flip detector and landing award (two-touch landing)
+    {
+      const bothOff = (!bike.frontOnGround && !bike.rearOnGround);
+
+      // Takeoff
+      if (bothOff && !flipSimple.air) {
+        flipSimple.air = true;
+        flipSimple.inverted = false;
+        flipSimple.armed = true;        // allow counting first entry
+        flipSimple.flipCount = 0;
+        flipSimple.landArming = false;  // unused with two-touch but kept for compatibility
+        flipSimple.landFrontSeen = false;
+        flipSimple.landRearSeen = false;
+      }
+
+      // Count inverted entries only while in air
+      updateInvertedDetector();
+
+      // Two-touch landing: award as soon as both wheels have touched once since takeoff
+      if (flipSimple.air) {
+        if (bike.frontOnGround) flipSimple.landFrontSeen = true;
+        if (bike.rearOnGround)  flipSimple.landRearSeen  = true;
+
+        if (flipSimple.landFrontSeen && flipSimple.landRearSeen) {
+          // CREDIT HERE: award flip score based on distance at validation
+          const n = Math.max(0, flipSimple.flipCount | 0);
+          const base = Math.floor(maxXReached);
+          let pct = 0;
+          if (n >= 3) pct = 0.75;
+          else if (n === 2) pct = 0.25;
+          else if (n === 1) pct = 0.07;
+
+          const gain = Math.round(base * pct);
+          if (gain > 0) {
+            scoreFlip += gain;
+            // Setup popup
+            flipToast.active = true;
+            flipToast.start = performance.now();
+            flipToast.duration = (CONFIG.HUD && CONFIG.HUD.POPUP_MS) || 3000;
+            flipToast.textHTML = `Flip x${n} +${gain}`;
+            if (flipPopup) {
+              flipPopup.innerHTML = `<span class="hudlabel">FLIP</span> x${n} <span class="badge">+${gain}</span>`;
+              flipPopup.style.display = 'block';
+              flipPopup.style.opacity = '1';
+            }
+          }
+          flipSimple.lastCredited = n;
+
+          // Reset for next jump
+          flipSimple.air = false;
+          flipSimple.inverted = false;
+          flipSimple.armed = false;
+          flipSimple.flipCount = 0;
+          flipSimple.landArming = false;
+          flipSimple.landFrontSeen = false;
+          flipSimple.landRearSeen = false;
+        }
+      } else {
+        // not airborne: do nothing
+      }
+    }
+
     // Distance/score progression
     const pos = bike.getPos();
     // Hard snap guard: keep camera close to rider at all times
@@ -2577,17 +2804,50 @@
     currentCheckpoint = passed;
 
     // HUD
-    hudDist.textContent = `${Math.floor(maxXReached)} m`;
     const v = bike.getVel();
     const speedKmh = Math.max(0, Math.round(Math.hypot(v.x, v.y) * 3.6));
     hudSpeed.textContent = `${speedKmh} km/h`;
-    hudLives.textContent = `${lives}/${CONFIG.MAX_LIVES}`;
+    if (hudSpeedFill) {
+      const vmax = (CONFIG.HUD && CONFIG.HUD.SPEED_MAX_KMH) || 120;
+      const pct = Math.max(0, Math.min(1, speedKmh / Math.max(1, vmax)));
+      hudSpeedFill.style.width = `${Math.round(pct * 100)}%`;
+    }
+    // Lives as hearts
+    if (hudLives) {
+      const full = Math.max(0, Math.min(CONFIG.MAX_LIVES, lives));
+      const empty = Math.max(0, CONFIG.MAX_LIVES - full);
+      hudLives.textContent = '❤️'.repeat(full) + '🤍'.repeat(empty);
+    }
+    // Scores (right HUD)
+    const scoreDistance = Math.floor(maxXReached);
+    const totalScore = scoreDistance + scoreFlip;
+    if (scoreDistEl) scoreDistEl.textContent = `${scoreDistance}`;
+    if (scoreFlipEl) scoreFlipEl.textContent = `${scoreFlip}`;
+    if (scoreTotalEl) scoreTotalEl.textContent = `${totalScore}`;
 
     // Invulnerability timer
     if (bike.invulnTimer > 0) bike.invulnTimer -= dt;
   }
 
   function onCrash() {
+    // Cancel any in-air flip counting and popup on death
+    try {
+      flipSimple.air = false;
+      flipSimple.inverted = false;
+      flipSimple.armed = false;
+      flipSimple.flipCount = 0;
+      flipSimple.landArming = false;
+      flipSimple.landFrontSeen = false;
+      flipSimple.landRearSeen = false;
+    } catch {}
+    try {
+      if (typeof flipToast !== 'undefined' && flipToast) flipToast.active = false;
+      if (typeof flipPopup !== 'undefined' && flipPopup) {
+        flipPopup.style.display = 'none';
+        flipPopup.style.opacity = '0';
+        flipPopup.innerHTML = '';
+      }
+    } catch {}
     const ignoreLives = CONFIG.DEBUG === true;
     if (!ignoreLives) {
       lives--;
@@ -2643,7 +2903,10 @@
       setTimeout(() => nameInput.focus(), 0);
       return;
     }
-    addScore(raw, Math.floor(maxXReached));
+    const distance = Math.floor(maxXReached);
+    const flip = Math.max(0, scoreFlip | 0);
+    const total = distance + flip;
+    addScore(raw, distance, flip, total);
     namePrompt.classList.add('hidden');
     saveScoreBtn.classList.add('hidden');
     renderLeaderboard(); // update
