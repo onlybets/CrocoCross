@@ -477,7 +477,24 @@
       SLOPE_MIN: 0.03,     // minimal |slope| (tanθ) for the downhill bias
       SLOPE_MAX_FRAC: 0.6, // cap slope to a fraction of current difficulty.slopeMax
       LEN_MIN: 30, LEN_MAX: 80,        // meters (regular long)
-      LLEN_MIN: 120, LLEN_MAX: 220     // meters (very long)
+      LLEN_MIN: 120, LLEN_MAX: 220,    // meters (very long)
+
+      // Post-descent cooldown (compress only positive slopes for a short window)
+      COOL_LEN_MIN: 20,                 // meters
+      COOL_LEN_MAX: 60,                 // meters
+      COOL_POS_FRAC: 0.35               // cap positive slope to 35% of normal inside cooldown
+    },
+
+    // Baseline + Relief model
+    BASELINE: {
+      LONG_PROB: 0.18,
+      LEN_MIN: 60, LEN_MAX: 160,
+      LLEN_MIN: 180, LLEN_MAX: 320,
+      SLOPE_MIN: 0.004,
+      SLOPE_MAX_FRAC: 0.45
+    },
+    RELIEF: {
+      POS_SLOPE_FRAC: 0.5
     },
 
     // Difficulty progression
@@ -559,7 +576,7 @@
       HUBS:    { rearOffsetX: -0.75, frontOffsetX: 0.85, hubY: -0.30 },
       MOTOR: {
         // Clean, snappy, progressive drive params
-        maxTorque: 30.0,
+        maxTorque: 90.0,
         speedLimit: 140.0,   // faster top speed
         ACCEL: 28.0,        // rad/s^2 forward build-up (per second)
         BRAKE: 26.0,        // rad/s^2 toward 0 when flipping
@@ -620,6 +637,15 @@
 
   // HUD config
   CONFIG.HUD = CONFIG.HUD || { SPEED_MAX_KMH: 120, POPUP_MS: 3000 };
+
+  // Downhill-only mode (optional). Enabled per request to force non-increasing terrain and allow infinite descent.
+  CONFIG.DOWNHILL = CONFIG.DOWNHILL || {
+    ENABLED: false,
+    EPS: 0.0,              // non-increasing tolerance (0 -> allow flats, >0 -> strictly decreasing)
+    RECENTER_Y: 2500.0,    // recenter threshold (absolute magnitude)
+    TARGET_Y: -2.0,        // target bike Y after recenter
+    DISABLE_HOLES: true    // simple: avoid hole lips that would create local up-ramps
+  };
 
   // Rider sprite asset
   const riderImg = new Image();
@@ -959,6 +985,18 @@
       this.descentEndX   = 0;
       this.descentSlope  = 0;
 
+      // Post-descent positive-slope cooldown state
+      this.coolActive = false;
+      this.coolStartX = 0;
+      this.coolEndX   = 0;
+      this.lastCoolPlanX = -1;
+
+      // Monotone baseline state (piecewise linear)
+      this.baseX = 0;
+      this.baseY = CONFIG.NOISE.base;
+      this.baseM = 0;
+      this.baseXEnd = 0;
+
       // Seeded phases for sine-based height to guarantee visible hills
       this.phase1 = this.rand() * Math.PI * 2;
       this.phase2 = this.rand() * Math.PI * 2;
@@ -974,13 +1012,44 @@
       };
     }
 
+    // Monotone baseline (piecewise linear) helpers
+    baselineEnsureCovering(x) {
+      // Advance baseline segments so that [baseX, baseXEnd] covers x
+      const BL = CONFIG.BASELINE || {};
+      while (x >= this.baseXEnd) {
+        // advance to end of current segment
+        this.baseY = this.baseY + this.baseM * (this.baseXEnd - this.baseX);
+        this.baseX = this.baseXEnd;
+
+        // plan next segment deterministically from world seed and boundary
+        const seedMix = (this.seed ^ 0x914c3f25 ^ (Math.floor(this.baseX * 6151) | 0)) >>> 0;
+        const rng = mulberry32(seedMix || 1);
+
+        const longOne = rng() < (BL.LONG_PROB ?? 0.18);
+        const len = longOne
+          ? lerp(BL.LLEN_MIN ?? 180, BL.LLEN_MAX ?? 320, rng())
+          : lerp(BL.LEN_MIN  ?? 60,  BL.LEN_MAX  ?? 160, rng());
+
+        const { slopeMax } = this.difficultyAt(this.baseX);
+        const cap = slopeMax * (BL.SLOPE_MAX_FRAC ?? 0.45);
+        const s = -lerp(BL.SLOPE_MIN ?? 0.004, cap, rng()); // non-positive
+
+        this.baseM = isFinite(s) ? Math.min(0, s) : 0;
+        this.baseXEnd = this.baseX + Math.max(1, len);
+      }
+    }
+
+    baselineAt(x) {
+      this.baselineEnsureCovering(x);
+      return this.baseY + this.baseM * (x - this.baseX);
+    }
+
     sampleHeight(x) {
       const n = CONFIG.NOISE;
-      // Sine-based relief (deterministic with seeded phases), plus a subtle value-noise wobble
-      // Frequencies are cycles per meter -> 2π * f * x
-      const f1 = 0.02; // ~50 m period (big hills)
-      const f2 = 0.06; // ~16.7 m
-      const f3 = 0.12; // ~8.3 m
+      // Relief: sines + value-noise wobble (zero-mean)
+      const f1 = 0.02;
+      const f2 = 0.06;
+      const f3 = 0.12;
       const ySine =
         n.amp1 * Math.sin((2 * Math.PI * f1) * x + this.phase1) +
         n.amp2 * Math.sin((2 * Math.PI * f2) * x + this.phase2) +
@@ -990,18 +1059,8 @@
         0.25 * this.noise.sample(x + 101.3, 0.3) +
         0.15 * this.noise.sample(x * 1.3 + 333.7, 0.55);
 
-      let y = n.base + ySine + wobble;
-
-      if (this.descentActive) {
-        const x0 = this.descentStartX, x1 = this.descentEndX;
-        if (x >= x0) {
-          const dx = Math.min(Math.max(0, x - x0), x1 - x0);
-          // linear negative bias across the span; auto turn-off past end
-          y += this.descentSlope * dx;
-          if (x >= x1) this.descentActive = false;
-        }
-      }
-      return y;
+      // Baseline + relief
+      return this.baselineAt(x) + ySine + wobble;
     }
 
     // Generate chunk starting at xStart
@@ -1012,31 +1071,9 @@
       const pts = [];
       let minY = Infinity;
 
-      // keep/stop an ongoing span
-      if (this.descentActive && xStart > this.descentEndX) this.descentActive = false;
 
-      // maybe start a new span at this chunk boundary (use per-chunk RNG to avoid perturbing global RNG)
-      const _seedMixDes = (this.seed ^ 0x6c8e9cf5 ^ (Math.floor(xStart * 9973) | 0)) >>> 0;
-      const _rngDes = mulberry32(_seedMixDes || 1);
 
-      if (!this.descentActive && _rngDes() < CONFIG.DESCENT.PROB) {
-        const longOne = (_rngDes() < CONFIG.DESCENT.LONG_PROB);
-        const len = longOne
-          ? lerp(CONFIG.DESCENT.LLEN_MIN, CONFIG.DESCENT.LLEN_MAX, _rngDes())
-          : lerp(CONFIG.DESCENT.LEN_MIN,  CONFIG.DESCENT.LEN_MAX,  _rngDes());
 
-        // keep within current difficulty slope guard
-        const { slopeMax } = this.difficultyAt(xStart);
-        const cap = slopeMax * CONFIG.DESCENT.SLOPE_MAX_FRAC;
-        const s   = -lerp(CONFIG.DESCENT.SLOPE_MIN, cap, _rngDes()); // negative = downhill
-
-        // start a bit after the seam so seam-blend stays smooth (outside seam-blend zone)
-        this.descentActive = true;
-        const startOffset = Math.max(4, (CONFIG.SEAM_BLEND_LEN || 0));
-        this.descentStartX = xStart + startOffset;
-        this.descentEndX   = this.descentStartX + len;
-        this.descentSlope  = s;
-      }
 
       // sample heights
       const yFlat0 = this.sampleHeight(0);
@@ -1082,10 +1119,14 @@
 
       // Optionally carve a hole
       const diff = this.difficultyAt(xStart);
-      // Enforce gentle slopes by smoothing/clamping to avoid flat fallbacks
-      this.smoothAndClamp(pts, diff.slopeMax);
+      const posScale = () =>
+        (CONFIG.RELIEF && typeof CONFIG.RELIEF.POS_SLOPE_FRAC === 'number')
+          ? CONFIG.RELIEF.POS_SLOPE_FRAC
+          : 1.0;
+      this.smoothAndClamp(pts, diff.slopeMax, !!(CONFIG.DOWNHILL && CONFIG.DOWNHILL.ENABLED), posScale);
       const canHole = (xStart >= CONFIG.START_SAFE_UNTIL) && ((xStart - this.lastHoleEnd) >= CONFIG.HOLE_MIN_SPACING); // delay holes and ensure spacing
-      const makeHole = canHole && this.rand() < diff.holeProb;
+      const allowHoles = !(CONFIG.DOWNHILL && CONFIG.DOWNHILL.ENABLED && CONFIG.DOWNHILL.DISABLE_HOLES === true);
+      const makeHole = allowHoles && canHole && this.rand() < diff.holeProb;
       let holes = [];
       if (makeHole) {
         // Determine hole width
@@ -1113,7 +1154,7 @@
               const adjEnd = holeStartX + Math.min(w, Math.max(CONFIG.HOLE_W_MIN, safe * 0.9));
               holes.push({ start: holeStartX, end: adjEnd });
               this.carveHole(pts, holeStartX, adjEnd, runup, land);
-              this.smoothAndClamp(pts, diff.slopeMax);
+              this.smoothAndClamp(pts, diff.slopeMax, !!(CONFIG.DOWNHILL && CONFIG.DOWNHILL.ENABLED), posScale);
               this.lastHoleEnd = adjEnd;
             }
           }
@@ -1122,7 +1163,7 @@
 
       // Validate slope constraints globally (post-smoothing). If slightly over, clamp once more.
       if (!this.validateSlope(pts, diff.slopeMax)) {
-        this.smoothAndClamp(pts, diff.slopeMax);
+        this.smoothAndClamp(pts, diff.slopeMax, !!(CONFIG.DOWNHILL && CONFIG.DOWNHILL.ENABLED), posScale);
       }
 
       // Split into contiguous ground segments excluding holes
@@ -1201,40 +1242,68 @@
       return true;
     }
 
-    // Smooth and clamp sampled heights to keep slopes playable without flattening everything
-    smoothAndClamp(pts, slopeMax) {
+    // Smooth and clamp sampled heights to keep slopes playable
+    // downhillOnly: optional non-increasing enforcement (currently disabled by default)
+    // posScaleAtX: optional function (x) -> [0..1] scaling for positive slope cap
+    smoothAndClamp(pts, slopeMax, downhillOnly = false, posScaleAtX /* optional */) {
       if (!pts || pts.length < 2) return;
-      const dx = CONFIG.SAMPLE_DX;
-      const maxDy = slopeMax * dx;
+      const maxDy = slopeMax * CONFIG.SAMPLE_DX;
       const stepMax = 1.2; // hard cap per segment jump (m)
+      const eps = (CONFIG.DOWNHILL && typeof CONFIG.DOWNHILL.EPS === 'number') ? CONFIG.DOWNHILL.EPS : 0.0;
+      const maxDrop = Math.min(stepMax, maxDy);
 
-      // forward pass
+      // forward pass (left -> right) — where we cap positive slopes with posScale
       let prev = pts[0].y;
       for (let i = 1; i < pts.length; i++) {
         let y = pts[i].y;
+        const x = pts[i].x;
+
+        // slope vs previous
         let dy = y - prev;
-        if (dy > maxDy) y = prev + maxDy;
+
+        // Positive-slope compression inside cooldown
+        const posScale = (typeof posScaleAtX === 'function') ? Math.max(0, Math.min(1, posScaleAtX(x))) : 1.0;
+        const posCap = maxDy * posScale;
+
+        if (dy > posCap) y = prev + posCap;
         else if (dy < -maxDy) y = prev - maxDy;
+
+        // step caps
         dy = y - prev;
         if (dy > stepMax) y = prev + stepMax;
         if (dy < -stepMax) y = prev - stepMax;
+
         // light smoothing
         y = 0.75 * y + 0.25 * prev;
+
+        if (downhillOnly) {
+          // enforce non-increasing and respect max drop
+          y = Math.min(y, prev - eps);
+          y = Math.max(y, prev - maxDrop);
+        }
+
         pts[i].y = y;
         prev = y;
       }
 
-      // backward pass
+      // backward pass (right -> left) — keep standard clamps; forward pass already tames positive climbs
       prev = pts[pts.length - 1].y;
       for (let i = pts.length - 2; i >= 0; i--) {
         let y = pts[i].y;
         let dy = y - prev;
         if (dy > maxDy) y = prev + maxDy;
         else if (dy < -maxDy) y = prev - maxDy;
-        dy = y - prev;
+
         if (dy > stepMax) y = prev + stepMax;
         if (dy < -stepMax) y = prev - stepMax;
+
         y = 0.75 * y + 0.25 * prev;
+
+        if (downhillOnly) {
+          // y[left] >= y[right] to keep non-increasing globally
+          y = Math.max(y, prev);
+        }
+
         pts[i].y = y;
         prev = y;
       }
@@ -1512,9 +1581,9 @@
           this.rebuildGfx(ch);
         }
         for (const cp of this.checkpoints) { cp.x -= s; }
-        // Shift any active planned descent span to maintain local alignment
-        this.descentStartX -= s;
-        this.descentEndX -= s;
+        // Shift baseline segment coordinates to maintain continuity
+        this.baseX -= s;
+        this.baseXEnd -= s;
         this.recomputeBoundsAfterShift();
 
         // Keep absolute score continuous: absX = worldOffsetX + bikeX (new bikeX ~ 10)
@@ -1535,6 +1604,41 @@
 
         // Notify applied delta to camera/users as the delta bodies experienced: -s
         onShift && onShift(-s);
+      }
+    }
+
+    // Vertical recentering for infinite downward terrain
+    shiftWorldYIfNeeded(bikeY, onShiftY) {
+      const DH = CONFIG.DOWNHILL || {};
+      if (!DH.ENABLED) return;
+      const recY = (typeof DH.RECENTER_Y === 'number') ? DH.RECENTER_Y : 2500.0;
+      const targetY = (typeof DH.TARGET_Y === 'number') ? DH.TARGET_Y : -2.0;
+      if (bikeY <= -recY) {
+        // To get newBikeY = targetY, subtract (bikeY - targetY) from all bodies.
+        const sy = (bikeY - targetY);
+        const v = Vec2(0, sy);
+        this.world.shiftOrigin(v); // bodies newPos = oldPos - sy
+
+        // Update stored coordinates with the SAME delta applied to bodies: subtract sy
+        for (const ch of this.chunks) {
+          for (const seg of ch.segments) {
+            for (const p of seg.pts) { p.y -= sy; }
+          }
+          for (const g of ch.gfx) {
+            for (const p of g.pts) { p.y -= sy; }
+          }
+          // Holes only carry X, nothing to adjust in Y.
+          delete ch.decorUnder;
+          delete ch.decorTop;
+          this.rebuildGfx(ch);
+        }
+        for (const cp of this.checkpoints) { cp.y -= sy; }
+        // Keep baseline consistent with vertical recenter
+        this.baseY -= sy;
+
+        this.recomputeBoundsAfterShift();
+        // Notify applied delta to camera/users as the delta bodies experienced: -sy
+        onShiftY && onShiftY(-sy);
       }
     }
 
@@ -1779,10 +1883,12 @@
             const sy = worldToScreenY(p.y, camera.y);
             if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
           }
-          // Close polygon to base
+          // Close polygon to base (ensure fill extends below screen bottom)
           const last = pts[pts.length - 1];
           const first = pts[0];
-          const baseW = Math.max(g.baseY, getChunkBaseY(pts) - CONFIG.CAM.groundPadBottom);
+          const worldH = VIEW_H / Math.max(1e-6, scale);
+          const worldBottom = camera.y - worldH * 0.5 - (CONFIG.CAM.groundPadBottom || 0);
+          const baseW = Math.min(getChunkBaseY(pts), worldBottom);
           const sxb = worldToScreenX(last.x, camera.x);
           const syb = worldToScreenY(baseW, camera.y);
           ctx.lineTo(sxb, syb);
@@ -2867,6 +2973,15 @@
       if (!Number.isFinite(camera.y)) camera.y = pos.y;
     });
 
+    // Vertical recentering (downhill mode)
+    terrain.shiftWorldYIfNeeded(pos.y, (dy) => {
+      camera.y += dy;
+      const snapY = CONFIG.CAM.snapY || 25;
+      if (!Number.isFinite(camera.y) || Math.abs(camera.y - pos.y) > snapY) {
+        camera.y = pos.y;
+      }
+    });
+
     // Camera follow (with failsafes)
     const camTargetX = pos.x + CONFIG.CAM.lookAhead;
     const snapX = CONFIG.CAM.snapX || 50;
@@ -2889,10 +3004,15 @@
       return;
     }
 
-    // Fall into abyss
-    if (pos.y < -60) {
-      onCrash();
-      return;
+    // Fall into abyss (camera-relative, far below screen)
+    {
+      const scale = CONFIG.SCALE;
+      const worldH = VIEW_H / Math.max(1e-6, scale);
+      const killY = camera.y - worldH * 1.25; // 25% below screen bottom
+      if (pos.y < killY) {
+        onCrash();
+        return;
+      }
     }
 
     // Checkpoint update: ensure currentCheckpoint is the last one <= bike absolute x
