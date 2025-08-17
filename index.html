@@ -565,7 +565,7 @@
     // Audio
     AUDIO: {
       default: 'off',        // 'music1' | 'music2' | 'off' (default OFF per spec)
-      volume: 0.5
+      volume: 0.2
     },
 
     // Bike params
@@ -754,19 +754,19 @@
       if (EngineState) return;
       const AC = new (window.AudioContext || window.webkitAudioContext)();
       // Create nodes
-      const osc1 = AC.createOscillator(); osc1.type = 'sawtooth';
-      const osc2 = AC.createOscillator(); osc2.type = 'sawtooth'; osc2.detune.value = +7; // cents
-      const oscSub = AC.createOscillator(); oscSub.type = 'square';
+      const osc1 = AC.createOscillator(); osc1.type = 'triangle';
+      const osc2 = AC.createOscillator(); osc2.type = 'triangle'; osc2.detune.value = +5; // softer detune
+      const oscSub = AC.createOscillator(); oscSub.type = 'sine';
 
-      const subGain = AC.createGain(); subGain.gain.value = 0.06; // subtle body
-      const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1200;
-      const sh = AC.createWaveShaper(); sh.curve = makeDistCurve(6);
+      const subGain = AC.createGain(); subGain.gain.value = 0.03; // subtler body
+      const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 800; lp.Q.value = 0.0001;
+      const sh = AC.createWaveShaper(); sh.curve = makeDistCurve(2);
       const engGain = AC.createGain(); engGain.gain.value = 0.0;
 
       // Simple compressor for headroom
       const comp = AC.createDynamicsCompressor();
-      comp.threshold.value = -18; comp.knee.value = 24; comp.ratio.value = 4;
-      comp.attack.value = 0.005; comp.release.value = 0.08;
+      comp.threshold.value = -20; comp.knee.value = 30; comp.ratio.value = 2.5;
+      comp.attack.value = 0.01; comp.release.value = 0.20;
 
       // Wind layer (simple sine; can be replaced by noise later)
       const windOsc = AC.createOscillator(); windOsc.type = 'sine';
@@ -838,12 +838,12 @@
 
     // Loudness and filter opening
     const throttle = ((axis | 0) !== 0) ? 1 : 0;
-    const vol = clamp(0.30 + 0.40 * throttle + 0.25 * norm, 0, 1) * (airborne ? 0.85 : 1.0);
-    S.engGain.gain.setTargetAtTime(vol, t, 0.03);
-    S.lp.frequency.setTargetAtTime(900 + 2600 * norm, t, 0.05);
+    const vol = clamp(0.10 + 0.20 * throttle + 0.15 * norm, 0, 0.60) * (airborne ? 0.75 : 1.0);
+    S.engGain.gain.setTargetAtTime(vol, t, 0.06);
+    S.lp.frequency.setTargetAtTime(500 + 1400 * norm + (throttle ? 200 : 0), t, 0.08);
 
     // Wind gain by speed, slight bump in air
-    const wVol = clamp(speed_mps * 0.01, 0, 0.25) + (airborne ? 0.05 : 0.0);
+    const wVol = clamp(speed_mps * 0.008, 0, 0.18) + (airborne ? 0.03 : 0.0);
     S.windGain.gain.setTargetAtTime(wVol, t, 0.10);
     S.windOsc.frequency.setTargetAtTime(120 + 140 * norm, t, 0.05);
   }
