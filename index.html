@@ -2209,8 +2209,8 @@
 
     setMotorSpeed(speed) {
       // Do not clamp here; clamping causes counter-torque (engine braking) on re-throttle
-      this.rearJoint.setMotorSpeed(speed);
-      this.frontJoint.setMotorSpeed(speed);
+      if (this.rearJoint && this.rearJoint.setMotorSpeed) this.rearJoint.setMotorSpeed(speed);
+      if (this.frontJoint && this.frontJoint.setMotorSpeed) this.frontJoint.setMotorSpeed(speed);
     }
 
     applyTiltTorque(dir, airborne) {
@@ -2231,6 +2231,13 @@
     isAirborne() {
       // Robust: driven by wheel contact flags with hysteresis (updated in fixedUpdate)
       return this.airState === 'AIR';
+    }
+
+    detachJoints() {
+      try {
+        if (this.rearJoint) { this.world.destroyJoint(this.rearJoint); this.rearJoint = null; }
+        if (this.frontJoint) { this.world.destroyJoint(this.frontJoint); this.frontJoint = null; }
+      } catch {}
     }
 
     destroy() {
@@ -2275,18 +2282,18 @@
       drawCircleBody(this.rear, '#2b2b2b', '#1a1a1a');
       drawCircleBody(this.front, '#2b2b2b', '#1a1a1a');
 
-      // Chassis (hide when sprite is shown unless debugging)
-      if (CONFIG.DEBUG || !riderLoaded || !CONFIG.BIKE.SPRITE.show) {
+      // Chassis (hide when sprite is shown unless debugging). During dying, force-hide structure.
+      if ((CONFIG.DEBUG || !riderLoaded || !CONFIG.BIKE.SPRITE.show) && lifeState !== 'dying') {
         drawRectBody(this.chassis, CONFIG.BIKE.CHASSIS.w, CONFIG.BIKE.CHASSIS.h, '#2b6cb0', '#0a3d78');
       }
 
-      // Helmet (sensor) visible only in debug
-      if (CONFIG.DEBUG) {
+      // Helmet (sensor) visible only in debug (but hide during dying)
+      if (CONFIG.DEBUG && lifeState !== 'dying') {
         drawCircleBody(this.helmet, '#ff4d4d', '#b31515');
       }
 
-      // Link lines (debug style)
-      if (CONFIG.DEBUG) {
+      // Link lines (debug style) — hide during dying
+      if (CONFIG.DEBUG && lifeState !== 'dying') {
         drawLink(this.chassis, this.rear);
         drawLink(this.chassis, this.front);
       }
@@ -2865,8 +2872,8 @@
 
     if (airborne || axis === 0) {
       // ---- COAST / AIR ----
-      bike.rearJoint.enableMotor(false);
-      bike.frontJoint.enableMotor(false);
+      if (bike.rearJoint) bike.rearJoint.enableMotor(false);
+      if (bike.frontJoint) bike.frontJoint.enableMotor(false);
       // tilt only in AIR (strict both-wheels-off). No ground tilt.
       if (airborne) {
         const T = (CONFIG.BIKE.TILT || {});
@@ -2895,8 +2902,8 @@
       }
     } else {
       // ---- DRIVE ----
-      bike.rearJoint.enableMotor(true);
-      bike.frontJoint.enableMotor(true);
+      if (bike.rearJoint) bike.rearJoint.enableMotor(true);
+      if (bike.frontJoint) bike.frontJoint.enableMotor(true);
 
       // progressive target toward cap (or toward 0 when flipping)
       const desiredCap = (axis > 0 ? dirFwd : -dirFwd) * (M.speedLimit || 32.0);
@@ -2917,8 +2924,8 @@
 
       const launch = Math.abs(wAvg) < ((M.LAUNCH_SPEED !== undefined) ? M.LAUNCH_SPEED : 4.0);
       const torqueNow = launch ? ((M.LAUNCH_TORQUE !== undefined) ? M.LAUNCH_TORQUE : 26.0) : (M.maxTorque || 90.0);
-      bike.rearJoint.setMaxMotorTorque && bike.rearJoint.setMaxMotorTorque(torqueNow);
-      bike.frontJoint.setMaxMotorTorque && bike.frontJoint.setMaxMotorTorque(torqueNow);
+      bike.rearJoint && bike.rearJoint.setMaxMotorTorque && bike.rearJoint.setMaxMotorTorque(torqueNow);
+      bike.frontJoint && bike.frontJoint.setMaxMotorTorque && bike.frontJoint.setMaxMotorTorque(torqueNow);
       bike.setMotorSpeed(motorTarget);   // truly unclamped
     }
 
@@ -3161,6 +3168,9 @@
       explosionFx.style.display = 'block';
       updateExplosionFxPosition();
     }
+
+    // Detach wheel joints so wheels are free to roll/bounce visually
+    try { if (bike && bike.detachJoints) bike.detachJoints(); } catch {}
     // Hard-cancel any flip state on death (double safety)
     try {
       flipSimple.air = false;
