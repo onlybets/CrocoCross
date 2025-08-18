@@ -365,10 +365,22 @@
     .cc-modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);z-index:9999}
     .cc-modal-card{min-width:320px;padding:20px 24px;border-radius:14px;background:#fff;box-shadow:0 10px 30px rgba(0,0,0,.25);text-align:center}
     .cc-modal-actions button{margin:8px;padding:10px 16px;font-weight:600}
+    /* Explosion FX overlay */
+    #explosionFx {
+      position: absolute;
+      left: 0;
+      top: 0;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      display: none;
+      z-index: 4; /* above canvas, below menus (menu z-index:5) */
+      image-rendering: pixelated;
+    }
   </style>
 </head>
 <body>
   <canvas id="game" width="1280" height="720"></canvas>
+  <img id="explosionFx" src="assets/img/explosion1.gif" alt="Explosion" />
 
   <div id="menu" class="menu-screen">
     <img src="assets/img/crococross-logo.png" alt="CrocoCross" class="menu-logo" />
@@ -621,6 +633,14 @@
     // Misc
     INVULN_TIME: 1.0,       // seconds after respawn
     DEBUG: false
+  };
+
+  // Respawn/Death VFX config
+  CONFIG.RESPAWN = {
+    EXPLOSION_MS: 2000,
+    FADE_OUT_MS: 500,
+    FADE_IN_MS: 1000,
+    ABOVE_CHECKPOINT_M: 3.5
   };
 
   // Flip counting config (added outside of CONFIG to avoid touching existing object literal)
@@ -893,6 +913,7 @@
   const flipPopup = document.getElementById('flipPopup');
   const musicBtn = document.getElementById('musicBtn');
   const engineBtn = document.getElementById('engineBtn');
+  let explosionFx = document.getElementById('explosionFx');
 
   const menu = document.getElementById('menu');
   const playBtn = document.getElementById('playBtn');
@@ -2236,6 +2257,7 @@
         const oy = spr.offsetY * scale;
 
         ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, playerAlpha));
         ctx.translate(sx, sy);
         ctx.rotate(-angle);
         if (spr.clipToChassis) {
@@ -2475,6 +2497,14 @@
   let state = STATE.MENU;
   let seed = newSeed();
 
+  // Life/respawn FSM
+  let lifeState = 'alive'; // 'alive' | 'dying' | 'respawning' | 'gameover'
+  let deathTimer = 0;
+  let respawnTimer = 0;
+  let playerAlpha = 1;
+  let deathPos = null; // Vec2 in world coords
+  let deathAngle = 0;
+
   let accumulator = 0;
   const fixedDt = 1 / CONFIG.FIXED_HZ;
   let lastTs = performance.now();
@@ -2624,6 +2654,12 @@
 
   function startNewGame() {
     resetWorld(newSeed());
+    // Reset death/respawn FSM and VFX
+    lifeState = 'alive';
+    deathTimer = 0;
+    respawnTimer = 0;
+    playerAlpha = 1;
+    try { if (explosionFx) explosionFx.style.display = 'none'; } catch {}
     setState(STATE.PLAYING);
   }
 
@@ -2637,6 +2673,15 @@
     menu.classList.toggle('hidden', s !== STATE.MENU);
     leaderboardView.classList.toggle('hidden', s !== STATE.LEADERBOARD);
     gameOver.classList.toggle('hidden', s !== STATE.GAMEOVER);
+
+    // Reset explosion/FSM when going to Menu/Home
+    if (s === STATE.MENU) {
+      try { if (explosionFx) explosionFx.style.display = 'none'; } catch {}
+      lifeState = 'alive';
+      playerAlpha = 1;
+      deathTimer = 0;
+      respawnTimer = 0;
+    }
 
     if (s === STATE.PLAYING || s === STATE.PAUSED) {
       hudBox.style.display = '';
@@ -2751,10 +2796,11 @@
     if (state === STATE.PLAYING && engineEnabled && typeof window.updateEngineAudio === 'function') {
       // Telemetry
       const airborne = (bike.airState === 'AIR');
+    if (lifeState === 'dying') { motorTarget = 0; }
       const wR = bike.rear.getAngularVelocity ? bike.rear.getAngularVelocity() : 0;
       const wF = bike.front.getAngularVelocity ? bike.front.getAngularVelocity() : 0;
       const wAvg = 0.5 * (wR + wF);
-      const axis = Math.sign((keys.right ? 1 : 0) + (keys.left ? -1 : 0));
+      const axis = (lifeState === 'dying') ? 0 : Math.sign((keys.right ? 1 : 0) + (keys.left ? -1 : 0));
       const v = bike.getVel();
       const speed_mps = Math.abs(v.x);
       try {
@@ -2780,6 +2826,9 @@
         flipPopup.style.opacity = `${alpha.toFixed(2)}`;
       }
     }
+    // Life/respawn FSM/timers
+    updateLifeFSM(dt);
+
     // Render at end
   }
 
@@ -2806,7 +2855,8 @@
     const airborne = (bike.airState === 'AIR');
     const dirFwd = -1; // negative motor speed drives right with current joint orientation
     const M = CONFIG.BIKE.MOTOR;
-    const axis = (keys.right ? 1 : 0) + (keys.left ? -1 : 0); // +1 forward, -1 reverse
+    const controlDisabled = (lifeState === 'dying');
+    const axis = controlDisabled ? 0 : ((keys.right ? 1 : 0) + (keys.left ? -1 : 0)); // +1 forward, -1 reverse
 
     // Read wheel speeds
     const wR = bike.rear.getAngularVelocity ? bike.rear.getAngularVelocity() : 0;
@@ -2821,7 +2871,7 @@
       if (airborne) {
         const T = (CONFIG.BIKE.TILT || {});
         const sign = (typeof T.SIGN === 'number') ? T.SIGN : 1;
-        const axis = Math.sign((keys.right ? 1 : 0) + (keys.left ? -1 : 0));
+        const axis = controlDisabled ? 0 : Math.sign((keys.right ? 1 : 0) + (keys.left ? -1 : 0));
 
         if (axis !== 0) {
           const MAX = (typeof T.MAX === 'number') ? T.MAX : 90.0;
@@ -2904,27 +2954,31 @@
         if (flipSimple.landFrontSeen && flipSimple.landRearSeen) {
           // CREDIT HERE: award flip score based on distance at validation
           const n = Math.max(0, flipSimple.flipCount | 0);
-          const base = Math.floor(maxXReached);
-          let pct = 0;
-          if (n >= 3) pct = 0.75;
-          else if (n === 2) pct = 0.25;
-          else if (n === 1) pct = 0.07;
+          if (lifeState === 'alive' && !bike.dead) {
+            const base = Math.floor(maxXReached);
+            let pct = 0;
+            if (n >= 3) pct = 0.75;
+            else if (n === 2) pct = 0.25;
+            else if (n === 1) pct = 0.07;
 
-          const gain = Math.round(base * pct);
-          if (gain > 0) {
-            scoreFlip += gain;
-            // Setup popup
-            flipToast.active = true;
-            flipToast.start = performance.now();
-            flipToast.duration = (CONFIG.HUD && CONFIG.HUD.POPUP_MS) || 3000;
-            flipToast.textHTML = `Flip x${n} +${gain}`;
-            if (flipPopup) {
-              flipPopup.innerHTML = `<span class="hudlabel">FLIP</span> x${n} <span class="badge">+${gain}</span>`;
-              flipPopup.style.display = 'block';
-              flipPopup.style.opacity = '1';
+            const gain = Math.round(base * pct);
+            if (gain > 0) {
+              scoreFlip += gain;
+              // Setup popup
+              flipToast.active = true;
+              flipToast.start = performance.now();
+              flipToast.duration = (CONFIG.HUD && CONFIG.HUD.POPUP_MS) || 3000;
+              flipToast.textHTML = `Flip x${n} +${gain}`;
+              if (flipPopup) {
+                flipPopup.innerHTML = `<span class="hudlabel">FLIP</span> x${n} <span class="badge">+${gain}</span>`;
+                flipPopup.style.display = 'block';
+                flipPopup.style.opacity = '1';
+              }
             }
+            flipSimple.lastCredited = n;
+          } else {
+            // No award if not alive or if a crash occurred in this step
           }
-          flipSimple.lastCredited = n;
 
           // Reset for next jump
           flipSimple.air = false;
@@ -3055,7 +3109,177 @@
     if (bike.invulnTimer > 0) bike.invulnTimer -= dt;
   }
 
+  // Death/Respawn finite-state machine
+  function updateExplosionFxPosition() {
+    if (!explosionFx || !deathPos) return;
+    const sx = worldToScreenXUI(deathPos.x);
+    const sy = worldToScreenYUI(deathPos.y);
+    const w = (CONFIG.BIKE.SPRITE.widthMeters || 2.4) * CONFIG.SCALE * 1.5;
+    explosionFx.style.width = `${Math.round(w)}px`;
+    explosionFx.style.left = `${sx}px`;
+    explosionFx.style.top = `${sy}px`;
+  }
+
+  function restartExplosionGif() {
+    if (!explosionFx) return;
+    const old = explosionFx;
+    const clone = old.cloneNode(false); // keep id/attrs
+    if (old.parentNode) {
+      old.parentNode.replaceChild(clone, old);
+    }
+    explosionFx = clone;
+    // keep hidden until we explicitly show on death
+    explosionFx.style.display = 'none';
+  }
+
+  function beginDying() {
+    // Enter dying state only from alive
+    lifeState = 'dying';
+    const R = CONFIG.RESPAWN || {};
+    deathTimer = (R.EXPLOSION_MS ? R.EXPLOSION_MS : 2000) / 1000;
+    playerAlpha = 1;
+
+    // Capture death position/angle
+    try {
+      if (bike && bike.chassis) {
+        const p = bike.chassis.getPosition();
+        deathPos = Vec2(p.x, p.y);
+        deathAngle = bike.chassis.getAngle();
+        // Damp motion: zero velocities once
+        bike.chassis.setLinearVelocity(Vec2(0, 0));
+        bike.chassis.setAngularVelocity(0);
+        bike.rear.setLinearVelocity(Vec2(0, 0));
+        bike.front.setLinearVelocity(Vec2(0, 0));
+        bike.rear.setAngularVelocity(0);
+        bike.front.setAngularVelocity(0);
+      }
+    } catch {}
+
+    // Show explosion (restart GIF to frame 0)
+    restartExplosionGif();
+    if (explosionFx) {
+      explosionFx.style.display = 'block';
+      updateExplosionFxPosition();
+    }
+    // Hard-cancel any flip state on death (double safety)
+    try {
+      flipSimple.air = false;
+      flipSimple.inverted = false;
+      flipSimple.armed = false;
+      flipSimple.flipCount = 0;
+      flipSimple.landArming = false;
+      flipSimple.landFrontSeen = false;
+      flipSimple.landRearSeen = false;
+    } catch {}
+
+    // Mute engine during dying
+    try { engineMuteImmediate(); engineSuspendIfSafe(); } catch {}
+  }
+
+  function updateLifeFSM(dt) {
+    const R = CONFIG.RESPAWN || {};
+    if (lifeState === 'dying') {
+      deathTimer -= dt;
+      const deathTotal = (R.EXPLOSION_MS ? R.EXPLOSION_MS : 2000) / 1000;
+      const fadeOutSec = (R.FADE_OUT_MS ? R.FADE_OUT_MS : 500) / 1000;
+      const elapsed = Math.max(0, Math.min(deathTotal, deathTotal - Math.max(0, deathTimer)));
+      if (elapsed <= fadeOutSec) {
+        playerAlpha = Math.max(0, 1 - (elapsed / Math.max(1e-6, fadeOutSec)));
+      } else {
+        playerAlpha = 0;
+      }
+      // Keep explosion anchored to captured deathPos
+      updateExplosionFxPosition();
+
+      if (deathTimer <= 0) {
+        // Hide explosion
+        if (explosionFx) explosionFx.style.display = 'none';
+        // Reset GIF to frame 0 while hidden so next death starts from the beginning
+        restartExplosionGif();
+
+        if (CONFIG.DEBUG === true || lives > 0) {
+          // Respawn above checkpoint
+          const cp = currentCheckpoint || { x: 0, y: 0 };
+          // Ensure visuals/terrain around the checkpoint before respawn
+          terrain.rebuildAllGfx && terrain.rebuildAllGfx();
+          terrain.ensureAhead(cp.x + 120, maxXReached);
+          if (!terrain.hasGfxNear(cp.x, CONFIG.CHUNK_LENGTH)) {
+            terrain.rebuildAllGfx && terrain.rebuildAllGfx();
+            terrain.ensureAhead(cp.x + 2 * CONFIG.CHUNK_LENGTH, maxXReached);
+          }
+          if (bike) bike.destroy();
+          const above = (typeof R.ABOVE_CHECKPOINT_M === 'number') ? R.ABOVE_CHECKPOINT_M : 3.5;
+          const xSpawn = cp.x - 0.3;
+          const ySpawn = cp.y + above;
+          bike = new Bike(world, { x: xSpawn, y: ySpawn });
+          // Zero velocities at spawn
+          bike.chassis.setLinearVelocity(Vec2(0, 0));
+          bike.chassis.setAngularVelocity(0);
+          bike.rear.setLinearVelocity(Vec2(0, 0));
+          bike.front.setLinearVelocity(Vec2(0, 0));
+          bike.rear.setAngularVelocity(0);
+          bike.front.setAngularVelocity(0);
+
+          motorTarget = 0;
+          // Invuln window
+          bike.invulnTimer = CONFIG.INVULN_TIME;
+
+          // Fade in while falling
+          playerAlpha = 0;
+          respawnTimer = (R.FADE_IN_MS ? R.FADE_IN_MS : 1000) / 1000;
+          lifeState = 'respawning';
+
+          // Resume engine audio if enabled
+          if (engineEnabled) {
+            try { engineResumeIfNeeded(); } catch {}
+          }
+        } else {
+          // Final death -> Game Over overlay
+          lifeState = 'gameover';
+          playerAlpha = 0;
+
+          // Prepare final score and overlay
+          finalScoreText.textContent = `Score: ${Math.floor(maxXReached)} m`;
+          const lb = loadLB();
+          const qualifies = lb.length < 10 || maxXReached > (lb[lb.length - 1]?.score || 0);
+          if (qualifies) {
+            namePrompt.classList.remove('hidden');
+            saveScoreBtn.classList.remove('hidden');
+            nameInput.value = '';
+            saveScoreBtn.disabled = true;
+            setTimeout(() => nameInput.focus(), 0);
+            setState(STATE.GAMEOVER);
+          } else {
+            namePrompt.classList.add('hidden');
+            saveScoreBtn.classList.add('hidden');
+            renderLeaderboard();
+            setState(STATE.LEADERBOARD);
+          }
+        }
+      }
+    } else if (lifeState === 'respawning') {
+      const total = (R.FADE_IN_MS ? R.FADE_IN_MS : 1000) / 1000;
+      respawnTimer -= dt;
+      const elapsed = Math.max(0, Math.min(total, total - Math.max(0, respawnTimer)));
+      playerAlpha = Math.max(0, Math.min(1, elapsed / Math.max(1e-6, total)));
+      if (respawnTimer <= 0) {
+        playerAlpha = 1;
+        lifeState = 'alive';
+      }
+    } else if (lifeState === 'alive') {
+      playerAlpha = 1;
+    } else if (lifeState === 'gameover') {
+      // keep alpha at 0 until leaving
+      playerAlpha = 0;
+    }
+  }
+
   function onCrash() {
+    // Guard: ignore repeated crashes during dying/respawning/gameover
+    if (lifeState !== 'alive') {
+      try { if (bike) bike.dead = false; } catch {}
+      return;
+    }
     // Cancel any in-air flip counting and popup on death
     try {
       flipSimple.air = false;
@@ -3078,6 +3302,11 @@
     if (!ignoreLives) {
       lives--;
     }
+    // Begin dying sequence; final Game Over handled after explosion
+    if (lifeState !== 'alive') return;
+    try { if (bike) bike.dead = false; } catch {}
+    beginDying();
+    return;
     if (ignoreLives || lives > 0) {
       // Respawn
       const cp = currentCheckpoint;
