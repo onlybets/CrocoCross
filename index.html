@@ -733,7 +733,7 @@
 
   // Downhill-only mode (optional). Enabled per request to force non-increasing terrain and allow infinite descent.
   CONFIG.DOWNHILL = CONFIG.DOWNHILL || {
-    ENABLED: false,
+    ENABLED: true,
     EPS: 0.0,              // non-increasing tolerance (0 -> allow flats, >0 -> strictly decreasing)
     RECENTER_Y: 2500.0,    // recenter threshold (absolute magnitude)
     TARGET_Y: -2.0,        // target bike Y after recenter
@@ -1228,7 +1228,7 @@
           : 1.0;
       this.smoothAndClamp(pts, diff.slopeMax, !!(CONFIG.DOWNHILL && CONFIG.DOWNHILL.ENABLED), posScale);
       const canHole = (xStart >= CONFIG.START_SAFE_UNTIL) && ((xStart - this.lastHoleEnd) >= CONFIG.HOLE_MIN_SPACING); // delay holes and ensure spacing
-      const allowHoles = !(CONFIG.DOWNHILL && CONFIG.DOWNHILL.ENABLED && CONFIG.DOWNHILL.DISABLE_HOLES === true);
+      const allowHoles = false; // hard override: globally disable hole generation
       const makeHole = allowHoles && canHole && this.rand() < diff.holeProb;
       let holes = [];
       if (makeHole) {
@@ -2733,6 +2733,10 @@
   // Flip scoring accumulator
   let scoreFlip = 0;
 
+  // Air-timeout death timer (both wheels off)
+  let airTimerMs = 0;
+  const AIR_DEATH_MS = 9000;
+
   // Simple airborne flip detector (dot-product + hysteresis)
   const flipSimple = {
     air: false,            // true when BOTH wheels are off
@@ -2882,6 +2886,8 @@
 
   function startNewGame() {
     resetWorld(newSeed());
+    // Reset air-timeout timer
+    airTimerMs = 0;
     // Reset death/respawn FSM and VFX
     lifeState = 'alive';
     deathTimer = 0;
@@ -3160,6 +3166,16 @@
     {
       const bothOff = (!bike.frontOnGround && !bike.rearOnGround);
 
+      // Air-timeout death (9 seconds, post-physics contact state)
+      if (bothOff) {
+        airTimerMs += dt * 1000;
+        if (airTimerMs >= AIR_DEATH_MS && lifeState === 'alive' && ((bike?.invulnTimer || 0) <= 0)) {
+          onCrash && onCrash('air-timeout');
+        }
+      } else {
+        airTimerMs = 0;
+      }
+
       // Takeoff
       if (bothOff && !flipSimple.air) {
         flipSimple.air = true;
@@ -3363,6 +3379,8 @@
   function beginDying() {
     // Enter dying state only from alive
     lifeState = 'dying';
+    // Reset air-timeout accumulation
+    airTimerMs = 0;
     const R = CONFIG.RESPAWN || {};
     deathTimer = (R.EXPLOSION_MS ? R.EXPLOSION_MS : 2000) / 1000;
     playerAlpha = 1;
@@ -3443,6 +3461,8 @@
           const xSpawn = cp.x - 0.3;
           const ySpawn = cp.y + above;
           bike = new Bike(world, { x: xSpawn, y: ySpawn });
+          // Reset air-timeout timer
+          airTimerMs = 0;
           // Zero velocities at spawn
           bike.chassis.setLinearVelocity(Vec2(0, 0));
           bike.chassis.setAngularVelocity(0);
