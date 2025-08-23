@@ -1220,13 +1220,48 @@
         }
       }
 
+      // Descent overlay: occasional long downhill spans with variable slope
+      {
+        const D = CONFIG.DESCENT || {};
+        // End an active descent span if we've passed it
+        if (this.descentActive && xStart >= this.descentEndX) {
+          this.descentActive = false;
+        }
+        // Possibly start a new descent at this chunk start
+        if (!this.descentActive && D && (D.PROB || 0) > 0 && this.rand() < D.PROB) {
+          const longOne = this.rand() < (D.LONG_PROB || 0);
+          const len = longOne
+            ? lerp(D.LLEN_MIN || 120, D.LLEN_MAX || 220, this.rand())
+            : lerp(D.LEN_MIN  || 30,  D.LEN_MAX  || 80,  this.rand());
+          const { slopeMax } = this.difficultyAt(xStart);
+          const cap  = slopeMax * (D.SLOPE_MAX_FRAC || 0.6);
+          const sMin = D.SLOPE_MIN || 0.03;
+          const mag  = Math.max(sMin, Math.min(cap, lerp(sMin, cap, this.rand()))); // tan(theta)
+          this.descentActive = true;
+          this.descentStartX = xStart;
+          this.descentEndX   = xStart + Math.max(5, len);
+          this.descentSlope  = mag; // positive magnitude; applied as downward bias
+        }
+        // Apply the descent bias inside the active span (linear ramp downwards)
+        if (this.descentActive) {
+          const x0 = Math.max(this.descentStartX, xStart);
+          for (let i = 0; i < pts.length; i++) {
+            const x = pts[i].x;
+            if (x >= this.descentStartX && x <= this.descentEndX) {
+              const dxLoc = Math.max(0, x - x0);
+              if (dxLoc > 0) pts[i].y -= this.descentSlope * dxLoc;
+            }
+          }
+        }
+      }
+
       // Optionally carve a hole
       const diff = this.difficultyAt(xStart);
       const posScale = () =>
         (CONFIG.RELIEF && typeof CONFIG.RELIEF.POS_SLOPE_FRAC === 'number')
           ? CONFIG.RELIEF.POS_SLOPE_FRAC
           : 1.0;
-      this.smoothAndClamp(pts, diff.slopeMax, !!(CONFIG.DOWNHILL && CONFIG.DOWNHILL.ENABLED), posScale);
+      this.smoothAndClamp(pts, diff.slopeMax, false, posScale);
       const canHole = (xStart >= CONFIG.START_SAFE_UNTIL) && ((xStart - this.lastHoleEnd) >= CONFIG.HOLE_MIN_SPACING); // delay holes and ensure spacing
       const allowHoles = false; // hard override: globally disable hole generation
       const makeHole = allowHoles && canHole && this.rand() < diff.holeProb;
@@ -1257,7 +1292,7 @@
               const adjEnd = holeStartX + Math.min(w, Math.max(CONFIG.HOLE_W_MIN, safe * 0.9));
               holes.push({ start: holeStartX, end: adjEnd });
               this.carveHole(pts, holeStartX, adjEnd, runup, land);
-              this.smoothAndClamp(pts, diff.slopeMax, !!(CONFIG.DOWNHILL && CONFIG.DOWNHILL.ENABLED), posScale);
+              this.smoothAndClamp(pts, diff.slopeMax, false, posScale);
               this.lastHoleEnd = adjEnd;
             }
           }
@@ -1266,7 +1301,7 @@
 
       // Validate slope constraints globally (post-smoothing). If slightly over, clamp once more.
       if (!this.validateSlope(pts, diff.slopeMax)) {
-        this.smoothAndClamp(pts, diff.slopeMax, !!(CONFIG.DOWNHILL && CONFIG.DOWNHILL.ENABLED), posScale);
+        this.smoothAndClamp(pts, diff.slopeMax, false, posScale);
       }
 
       // Split into contiguous ground segments excluding holes
