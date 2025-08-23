@@ -551,35 +551,38 @@
     NOISE: {
       base: -2.0,                     // average ground height (m)
       amp1: 1.8, freq1: 0.05,         // first octave (slightly stronger, longer wavelength)
-      amp2: 0.9, freq2: 0.12,         // second octave
-      amp3: 0.5, freq3: 0.25          // third octave
+      amp2: 1.0, freq2: 0.12,         // second octave (slightly stronger; tighter rollers ~16.7m)
+      amp3: 0.45, freq3: 0.22         // third octave (more micro-rollers, still controlled)
     },
 
     // Long downhill overlay (deterministic spans)
     DESCENT: {
-      PROB: 0.16,          // chance at a chunk start to start a downhill
-      LONG_PROB: 0.05,     // subset of starts become “very long”
+      PROB: 0.10,          // plus rare: la plupart du temps = petites collines
+      LONG_PROB: 0.03,     // “très longues” (désormais limitées) encore plus rares
       SLOPE_MIN: 0.03,     // minimal |slope| (tanθ) for the downhill bias
       SLOPE_MAX_FRAC: 0.6, // cap slope to a fraction of current difficulty.slopeMax
-      LEN_MIN: 30, LEN_MAX: 80,        // meters (regular long)
-      LLEN_MIN: 120, LLEN_MAX: 220,    // meters (very long)
+      LEN_MIN: 40, LEN_MAX: 80,         // descentes “longues” typiques ~40–80m
+      LLEN_MIN: 90, LLEN_MAX: 120,      // grosses descentes ~100m max
 
       // Post-descent cooldown (compress only positive slopes for a short window)
-      COOL_LEN_MIN: 20,                 // meters
-      COOL_LEN_MAX: 60,                 // meters
-      COOL_POS_FRAC: 0.35               // cap positive slope to 35% of normal inside cooldown
+      COOL_LEN_MIN: 15,                 // gardé court: retour rapide aux petites collines
+      COOL_LEN_MAX: 40,
+      COOL_POS_FRAC: 0.6
     },
 
     // Baseline + Relief model
     BASELINE: {
-      LONG_PROB: 0.18,
-      LEN_MIN: 60, LEN_MAX: 160,
-      LLEN_MIN: 180, LLEN_MAX: 320,
+      LONG_PROB: 0.10,
+      LEN_MIN: 35, LEN_MAX: 100,
+      LLEN_MIN: 80, LLEN_MAX: 140,  // éviter de trop longues pentes douces (~400m)
       SLOPE_MIN: 0.004,
       SLOPE_MAX_FRAC: 0.45
     },
     RELIEF: {
-      POS_SLOPE_FRAC: 0.5
+      POS_SLOPE_FRAC: 0.45
+    },
+    ROLLERS: {
+      MAX_UP_RUN: 24.0
     },
 
     // Difficulty progression
@@ -1159,8 +1162,8 @@
         n.amp3 * Math.sin((2 * Math.PI * f3) * x + this.phase3);
 
       const wobble =
-        0.25 * this.noise.sample(x + 101.3, 0.3) +
-        0.15 * this.noise.sample(x * 1.3 + 333.7, 0.55);
+        0.28 * this.noise.sample(x + 101.3, 0.3) +
+        0.18 * this.noise.sample(x * 1.3 + 333.7, 0.65);
 
       // Baseline + relief
       return this.baselineAt(x) + ySine + wobble;
@@ -1223,9 +1226,17 @@
       // Descent overlay: occasional long downhill spans with variable slope
       {
         const D = CONFIG.DESCENT || {};
-        // End an active descent span if we've passed it
+        // End an active descent span if we've passed it; start cooldown clamp on climbs
         if (this.descentActive && xStart >= this.descentEndX) {
           this.descentActive = false;
+          const lenC = lerp(D.COOL_LEN_MIN || 20, D.COOL_LEN_MAX || 60, this.rand());
+          this.coolActive = true;
+          this.coolStartX = this.descentEndX;
+          this.coolEndX   = this.descentEndX + Math.max(5, lenC);
+        }
+        // End cooldown window if passed
+        if (this.coolActive && xStart >= this.coolEndX) {
+          this.coolActive = false;
         }
         // Possibly start a new descent at this chunk start
         if (!this.descentActive && D && (D.PROB || 0) > 0 && this.rand() < D.PROB) {
@@ -1257,11 +1268,28 @@
 
       // Optionally carve a hole
       const diff = this.difficultyAt(xStart);
-      const posScale = () =>
-        (CONFIG.RELIEF && typeof CONFIG.RELIEF.POS_SLOPE_FRAC === 'number')
+      const posScaleAtX = (x) => {
+        const base = (CONFIG.RELIEF && typeof CONFIG.RELIEF.POS_SLOPE_FRAC === 'number')
           ? CONFIG.RELIEF.POS_SLOPE_FRAC
           : 1.0;
-      this.smoothAndClamp(pts, diff.slopeMax, false, posScale);
+        if (this.coolActive && x >= this.coolStartX && x <= this.coolEndX) {
+          const frac = (CONFIG.DESCENT && typeof CONFIG.DESCENT.COOL_POS_FRAC === 'number')
+            ? CONFIG.DESCENT.COOL_POS_FRAC
+            : 0.35;
+          return Math.max(0, Math.min(1, base * frac));
+        }
+        return base;
+      };
+      // First pass smoothing/clamp
+      this.smoothAndClamp(pts, diff.slopeMax, false, posScaleAtX);
+      // Hard cap continuous uphill run length (avoid very long climbs)
+      {
+        const maxUp = (CONFIG.ROLLERS && typeof CONFIG.ROLLERS.MAX_UP_RUN === 'number') ? CONFIG.ROLLERS.MAX_UP_RUN : 24.0;
+        const initRun = this.endUpRunLenFromPrevChunk();
+        this.capPositiveRun(pts, maxUp, diff.slopeMax, initRun);
+        // Re-smooth after capping to maintain playability and harmony
+        this.smoothAndClamp(pts, diff.slopeMax, false, posScaleAtX);
+      }
       const canHole = (xStart >= CONFIG.START_SAFE_UNTIL) && ((xStart - this.lastHoleEnd) >= CONFIG.HOLE_MIN_SPACING); // delay holes and ensure spacing
       const allowHoles = false; // hard override: globally disable hole generation
       const makeHole = allowHoles && canHole && this.rand() < diff.holeProb;
@@ -1292,7 +1320,7 @@
               const adjEnd = holeStartX + Math.min(w, Math.max(CONFIG.HOLE_W_MIN, safe * 0.9));
               holes.push({ start: holeStartX, end: adjEnd });
               this.carveHole(pts, holeStartX, adjEnd, runup, land);
-              this.smoothAndClamp(pts, diff.slopeMax, false, posScale);
+              this.smoothAndClamp(pts, diff.slopeMax, false, posScaleAtX);
               this.lastHoleEnd = adjEnd;
             }
           }
@@ -1301,7 +1329,7 @@
 
       // Validate slope constraints globally (post-smoothing). If slightly over, clamp once more.
       if (!this.validateSlope(pts, diff.slopeMax)) {
-        this.smoothAndClamp(pts, diff.slopeMax, false, posScale);
+        this.smoothAndClamp(pts, diff.slopeMax, false, posScaleAtX);
       }
 
       // Split into contiguous ground segments excluding holes
@@ -1385,13 +1413,16 @@
     // posScaleAtX: optional function (x) -> [0..1] scaling for positive slope cap
     smoothAndClamp(pts, slopeMax, downhillOnly = false, posScaleAtX /* optional */) {
       if (!pts || pts.length < 2) return;
-      const maxDy = slopeMax * CONFIG.SAMPLE_DX;
-      const stepMax = 1.2; // hard cap per segment jump (m)
+      const dxS = CONFIG.SAMPLE_DX;
+      const maxDy = slopeMax * dxS;
+      const stepMax = 0.8; // tighter cap per segment jump (m) to avoid abrupt steps
       const eps = (CONFIG.DOWNHILL && typeof CONFIG.DOWNHILL.EPS === 'number') ? CONFIG.DOWNHILL.EPS : 0.0;
       const maxDrop = Math.min(stepMax, maxDy);
+      const maxSlopeDelta = Math.min(0.42, (slopeMax || 0) * 0.8); // allow more curvature while staying smooth
 
-      // forward pass (left -> right) — where we cap positive slopes with posScale
+      // forward pass (left -> right) — where we cap positive slopes with posScale and limit curvature
       let prev = pts[0].y;
+      let prevM = null; // previous slope (dy/dx)
       for (let i = 1; i < pts.length; i++) {
         let y = pts[i].y;
         const x = pts[i].x;
@@ -1399,20 +1430,30 @@
         // slope vs previous
         let dy = y - prev;
 
-        // Positive-slope compression inside cooldown
+        // Positive-slope compression (optionally position-dependent)
         const posScale = (typeof posScaleAtX === 'function') ? Math.max(0, Math.min(1, posScaleAtX(x))) : 1.0;
         const posCap = maxDy * posScale;
 
         if (dy > posCap) y = prev + posCap;
         else if (dy < -maxDy) y = prev - maxDy;
 
-        // step caps
+        // Curvature clamp: limit change of slope (m) vs previous
+        dy = y - prev;
+        let m = dy / dxS;
+        if (prevM !== null) {
+          const dm = m - prevM;
+          if (dm > maxSlopeDelta) m = prevM + maxSlopeDelta;
+          else if (dm < -maxSlopeDelta) m = prevM - maxSlopeDelta;
+          y = prev + m * dxS;
+        }
+
+        // step caps (absolute vertical change per sample)
         dy = y - prev;
         if (dy > stepMax) y = prev + stepMax;
         if (dy < -stepMax) y = prev - stepMax;
 
-        // light smoothing
-        y = 0.75 * y + 0.25 * prev;
+        // smoothing
+        y = 0.70 * y + 0.30 * prev;
 
         if (downhillOnly) {
           // enforce non-increasing and respect max drop
@@ -1421,21 +1462,41 @@
         }
 
         pts[i].y = y;
+        prevM = (y - prev) / dxS;
         prev = y;
       }
 
-      // backward pass (right -> left) — keep standard clamps; forward pass already tames positive climbs
+      // backward pass (right -> left) — reinforce clamps and curvature limits
       prev = pts[pts.length - 1].y;
+      prevM = null;
       for (let i = pts.length - 2; i >= 0; i--) {
         let y = pts[i].y;
-        let dy = y - prev;
-        if (dy > maxDy) y = prev + maxDy;
-        else if (dy < -maxDy) y = prev - maxDy;
 
+        // slope vs next (prev is to the right)
+        let dy = y - prev;
+        let m = dy / dxS;
+
+        // symmetric slope clamp
+        if (m > slopeMax) m = slopeMax;
+        else if (m < -slopeMax) m = -slopeMax;
+
+        // curvature clamp vs previous slope
+        if (prevM !== null) {
+          const dm = m - prevM;
+          if (dm > maxSlopeDelta) m = prevM + maxSlopeDelta;
+          else if (dm < -maxSlopeDelta) m = prevM - maxSlopeDelta;
+        }
+
+        // reconstruct y from clamped slope
+        y = prev + m * dxS;
+
+        // step caps
+        dy = y - prev;
         if (dy > stepMax) y = prev + stepMax;
         if (dy < -stepMax) y = prev - stepMax;
 
-        y = 0.75 * y + 0.25 * prev;
+        // smoothing
+        y = 0.70 * y + 0.30 * prev;
 
         if (downhillOnly) {
           // y[left] >= y[right] to keep non-increasing globally
@@ -1443,7 +1504,58 @@
         }
 
         pts[i].y = y;
+        prevM = (y - prev) / dxS;
         prev = y;
+      }
+    }
+
+    // Compute continuous positive-slope run length at end of previous chunk across the seam
+    endUpRunLenFromPrevChunk() {
+      if (this.chunks.length === 0) return 0;
+      const prev = this.chunks[this.chunks.length - 1];
+      if (!prev || !prev.gfx || prev.gfx.length === 0) return 0;
+      const last = prev.gfx[prev.gfx.length - 1];
+      const arr = (last && Array.isArray(last.pts)) ? last.pts : null;
+      if (!arr || arr.length < 2) return 0;
+      let run = 0;
+      for (let i = arr.length - 1; i > 0; i--) {
+        const a = arr[i - 1], b = arr[i];
+        const dx = Math.max(0, b.x - a.x);
+        const dy = b.y - a.y;
+        if (dy > 0 && dx > 0) {
+          run += dx;
+        } else {
+          break;
+        }
+      }
+      return run;
+    }
+
+    // Prevent very long continuous climbs by capping uphill run length (in meters)
+    capPositiveRun(pts, maxRun, slopeMax, initialRun = 0) {
+      if (!pts || pts.length < 2) return;
+      const dxS = CONFIG.SAMPLE_DX;
+      const maxDy = (slopeMax || 0.9) * dxS;
+      const downKick = Math.min(0.08, Math.max(0.02, maxDy * 0.4)); // small downward nudge to break run
+      let run = Math.max(0, Number(initialRun) || 0);
+      let prevY = pts[0].y;
+      for (let i = 1; i < pts.length; i++) {
+        const y = pts[i].y;
+        const dy = y - prevY;
+        if (dy > 0) {
+          run += dxS;
+          if (run > (maxRun || 24.0)) {
+            // Break the uphill gently: enforce a tiny drop relative to previous
+            const newY = prevY - downKick;
+            pts[i].y = (y < newY) ? y : newY;
+            prevY = pts[i].y;
+            run = 0; // restart run after the break
+            continue;
+          }
+        } else {
+          run = 0;
+        }
+        prevY = pts[i].y;
       }
     }
 
