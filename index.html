@@ -537,7 +537,7 @@
     GRAVITY: 9.81,                    // m/s^2
     FIXED_HZ: 60,                     // physics Hz
     CHUNK_LENGTH: 60,                 // meters per terrain chunk
-    SAMPLE_DX: 1.2,                   // meter sampling step
+    SAMPLE_DX: 1.0,                   // meter sampling step
     GROUND_THICK: 4,                  // line width for drawing contour
     GROUND_FRICTION: 1.2,
     GROUND_RESTITUTION: 0.0,
@@ -550,24 +550,46 @@
     // Terrain noise
     NOISE: {
       base: -2.0,                     // average ground height (m)
-      amp1: 1.8, freq1: 0.05,         // first octave (slightly stronger, longer wavelength)
-      amp2: 1.0, freq2: 0.12,         // second octave (slightly stronger; tighter rollers ~16.7m)
-      amp3: 0.45, freq3: 0.22         // third octave (more micro-rollers, still controlled)
+      amp1: 1.6, freq1: 0.03,         // hills ~33 m
+      amp2: 1.0, freq2: 0.08,         // rollers ~12.5 m
+      amp3: 0.35, freq3: 0.16         // subtle micro (~6.25 m)
     },
 
     // Long downhill overlay (deterministic spans)
     DESCENT: {
-      PROB: 0.10,          // plus rare: la plupart du temps = petites collines
-      LONG_PROB: 0.03,     // “très longues” (désormais limitées) encore plus rares
-      SLOPE_MIN: 0.03,     // minimal |slope| (tanθ) for the downhill bias
-      SLOPE_MAX_FRAC: 0.6, // cap slope to a fraction of current difficulty.slopeMax
-      LEN_MIN: 40, LEN_MAX: 80,         // descentes “longues” typiques ~40–80m
-      LLEN_MIN: 90, LLEN_MAX: 120,      // grosses descentes ~100m max
+      PROB: 0.14,
+      LONG_PROB: 0.05,
+      SLOPE_MIN: 0.03,       // minimal |slope| (tanθ) for the downhill bias
+      SLOPE_MAX_FRAC: 0.55,  // cap slope to a fraction of current difficulty.slopeMax
+      LEN_MIN: 40, LEN_MAX: 80,
+      LLEN_MIN: 90, LLEN_MAX: 120,
+
+      // Calm filter applied inside descent spans (reduces micro-rollers)
+      CALM_PASSES: 1,
+      CALM_MIX: 0.5,
+
+      // Short rebound uphill after a descent
+      REBOUND: {
+        LEN_MIN: 6,
+        LEN_MAX: 12,
+        SLOPE_MIN: 0.012,
+        SLOPE_MAX: 0.020
+      },
 
       // Post-descent cooldown (compress only positive slopes for a short window)
-      COOL_LEN_MIN: 15,                 // gardé court: retour rapide aux petites collines
-      COOL_LEN_MAX: 40,
-      COOL_POS_FRAC: 0.6
+      COOL_LEN_MIN: 12,
+      COOL_LEN_MAX: 26,
+      COOL_POS_FRAC: 0.5
+    },
+
+    // Small “bumps” overlay (rare; adds sharper micro undulations locally)
+    BUMPS: {
+      PROB: 0.12,          // chance to start a bumps window at a chunk start
+      LEN_MIN: 8,          // meters
+      LEN_MAX: 18,         // meters
+      AMP_MIN: 0.25,       // meters vertical
+      AMP_MAX: 0.55,
+      FREQ: 0.35           // ~2.9 m wavelength inside the window
     },
 
     // Baseline + Relief model
@@ -579,10 +601,10 @@
       SLOPE_MAX_FRAC: 0.45
     },
     RELIEF: {
-      POS_SLOPE_FRAC: 0.45
+      POS_SLOPE_FRAC: 0.34
     },
     ROLLERS: {
-      MAX_UP_RUN: 24.0
+      MAX_UP_RUN: 12.0
     },
 
     // Difficulty progression
@@ -1097,6 +1119,18 @@
       this.coolEndX   = 0;
       this.lastCoolPlanX = -1;
 
+      // Post-descent rebound uphill state
+      this.reboundActive = false;
+      this.reboundStartX = 0;
+      this.reboundEndX   = 0;
+      this.reboundSlope  = 0;
+
+      // Occasional bumps state
+      this.bumpsActive = false;
+      this.bumpsStartX = 0;
+      this.bumpsEndX   = 0;
+      this.bumpsPhase  = 0;
+
       // Monotone baseline state (piecewise linear)
       this.baseX = 0;
       this.baseY = CONFIG.NOISE.base;
@@ -1153,9 +1187,9 @@
     sampleHeight(x) {
       const n = CONFIG.NOISE;
       // Relief: sines + value-noise wobble (zero-mean)
-      const f1 = 0.02;
-      const f2 = 0.06;
-      const f3 = 0.12;
+      const f1 = n.freq1 || 0.02;
+      const f2 = n.freq2 || 0.06;
+      const f3 = n.freq3 || 0.12;
       const ySine =
         n.amp1 * Math.sin((2 * Math.PI * f1) * x + this.phase1) +
         n.amp2 * Math.sin((2 * Math.PI * f2) * x + this.phase2) +
@@ -1226,26 +1260,45 @@
       // Descent overlay: occasional long downhill spans with variable slope
       {
         const D = CONFIG.DESCENT || {};
-        // End an active descent span if we've passed it; start cooldown clamp on climbs
+
+        // End an active descent: start rebound first, then cooldown after rebound
         if (this.descentActive && xStart >= this.descentEndX) {
           this.descentActive = false;
-          const lenC = lerp(D.COOL_LEN_MIN || 20, D.COOL_LEN_MAX || 60, this.rand());
-          this.coolActive = true;
-          this.coolStartX = this.descentEndX;
-          this.coolEndX   = this.descentEndX + Math.max(5, lenC);
+
+          const RB = (D.REBOUND || {});
+          const rLen = lerp(RB.LEN_MIN || 6, RB.LEN_MAX || 12, this.rand());
+          const rMin = RB.SLOPE_MIN || 0.012;
+          const rMax = RB.SLOPE_MAX || 0.020;
+          const rSlope = lerp(rMin, rMax, this.rand());
+
+          this.reboundActive = true;
+          this.reboundStartX = this.descentEndX;
+          this.reboundEndX   = this.descentEndX + Math.max(2, rLen);
+          this.reboundSlope  = Math.max(0, rSlope); // small positive (uphill) bias
         }
+
+        // End rebound: now apply cooldown compression phase
+        if (this.reboundActive && xStart >= this.reboundEndX) {
+          this.reboundActive = false;
+          const lenC = lerp(D.COOL_LEN_MIN || 12, D.COOL_LEN_MAX || 26, this.rand());
+          this.coolActive = true;
+          this.coolStartX = this.reboundEndX;
+          this.coolEndX   = this.reboundEndX + Math.max(5, lenC);
+        }
+
         // End cooldown window if passed
         if (this.coolActive && xStart >= this.coolEndX) {
           this.coolActive = false;
         }
+
         // Possibly start a new descent at this chunk start
-        if (!this.descentActive && D && (D.PROB || 0) > 0 && this.rand() < D.PROB) {
+        if (!this.descentActive && !this.reboundActive && D && (D.PROB || 0) > 0 && this.rand() < D.PROB) {
           const longOne = this.rand() < (D.LONG_PROB || 0);
           const len = longOne
             ? lerp(D.LLEN_MIN || 120, D.LLEN_MAX || 220, this.rand())
             : lerp(D.LEN_MIN  || 30,  D.LEN_MAX  || 80,  this.rand());
           const { slopeMax } = this.difficultyAt(xStart);
-          const cap  = slopeMax * (D.SLOPE_MAX_FRAC || 0.6);
+          const cap  = slopeMax * (D.SLOPE_MAX_FRAC || 0.55);
           const sMin = D.SLOPE_MIN || 0.03;
           const mag  = Math.max(sMin, Math.min(cap, lerp(sMin, cap, this.rand()))); // tan(theta)
           this.descentActive = true;
@@ -1253,6 +1306,7 @@
           this.descentEndX   = xStart + Math.max(5, len);
           this.descentSlope  = mag; // positive magnitude; applied as downward bias
         }
+
         // Apply the descent bias inside the active span (linear ramp downwards)
         if (this.descentActive) {
           const x0 = Math.max(this.descentStartX, xStart);
@@ -1263,12 +1317,71 @@
               if (dxLoc > 0) pts[i].y -= this.descentSlope * dxLoc;
             }
           }
+          // Calm filter inside the descent span to reduce micro-rollers
+          const passes = (D.CALM_PASSES || 0);
+          const mix = Math.max(0, Math.min(1, D.CALM_MIX || 0));
+          for (let p = 0; p < passes; p++) {
+            for (let i = 1; i < pts.length - 1; i++) {
+              const x = pts[i].x;
+              if (x >= this.descentStartX && x <= this.descentEndX) {
+                const avg = 0.5 * (pts[i - 1].y + pts[i + 1].y);
+                pts[i].y = pts[i].y * (1 - mix) + avg * mix;
+              }
+            }
+          }
+        }
+
+        // Apply the small rebound uphill bias just after the descent
+        if (this.reboundActive) {
+          const x0 = Math.max(this.reboundStartX, xStart);
+          for (let i = 0; i < pts.length; i++) {
+            const x = pts[i].x;
+            if (x >= this.reboundStartX && x <= this.reboundEndX) {
+              const dxLoc = Math.max(0, x - x0);
+              if (dxLoc > 0) pts[i].y += this.reboundSlope * dxLoc;
+            }
+          }
+        }
+      }
+
+      // Occasional "bumps" window: sharper small waves (rare)
+      {
+        const BP = CONFIG.BUMPS || {};
+        // End bumps window if passed
+        if (this.bumpsActive && xStart >= this.bumpsEndX) {
+          this.bumpsActive = false;
+        }
+        // Possibly start a new bumps window (skip if in descent/rebound/cooldown)
+        if (!this.descentActive && !this.reboundActive && !this.coolActive && !this.bumpsActive && (BP.PROB || 0) > 0 && this.rand() < BP.PROB) {
+          const len = lerp(BP.LEN_MIN || 8, BP.LEN_MAX || 18, this.rand());
+          this.bumpsStartX = xStart;
+          this.bumpsEndX   = xStart + Math.max(4, len);
+          this.bumpsPhase  = this.rand() * Math.PI * 2;
+          this.bumpsActive = true;
+        }
+        // Apply bumps overlay inside active window
+        if (this.bumpsActive) {
+          const freq = BP.FREQ || 0.35;
+          const ampMin = BP.AMP_MIN || 0.25;
+          const ampMax = BP.AMP_MAX || 0.55;
+          const amp = lerp(ampMin, ampMax, this.rand());
+          const tri = (t) => (2 / Math.PI) * Math.asin(Math.sin(t));
+          for (let i = 0; i < pts.length; i++) {
+            const x = pts[i].x;
+            if (x >= this.bumpsStartX && x <= this.bumpsEndX) {
+              pts[i].y += amp * tri((2 * Math.PI * freq) * x + this.bumpsPhase);
+            }
+          }
         }
       }
 
       // Optionally carve a hole
       const diff = this.difficultyAt(xStart);
       const posScaleAtX = (x) => {
+        // During rebound, do not compress positive slopes (allow a small climb)
+        if (this.reboundActive && x >= this.reboundStartX && x <= this.reboundEndX) {
+          return 1.0;
+        }
         const base = (CONFIG.RELIEF && typeof CONFIG.RELIEF.POS_SLOPE_FRAC === 'number')
           ? CONFIG.RELIEF.POS_SLOPE_FRAC
           : 1.0;
@@ -1418,7 +1531,7 @@
       const stepMax = 0.8; // tighter cap per segment jump (m) to avoid abrupt steps
       const eps = (CONFIG.DOWNHILL && typeof CONFIG.DOWNHILL.EPS === 'number') ? CONFIG.DOWNHILL.EPS : 0.0;
       const maxDrop = Math.min(stepMax, maxDy);
-      const maxSlopeDelta = Math.min(0.42, (slopeMax || 0) * 0.8); // allow more curvature while staying smooth
+      const maxSlopeDelta = Math.min(0.48, (slopeMax || 0) * 0.9); // allow curvature but keep hills smooth
 
       // forward pass (left -> right) — where we cap positive slopes with posScale and limit curvature
       let prev = pts[0].y;
@@ -1452,8 +1565,8 @@
         if (dy > stepMax) y = prev + stepMax;
         if (dy < -stepMax) y = prev - stepMax;
 
-        // smoothing
-        y = 0.70 * y + 0.30 * prev;
+        // smoothing tuned for “collines” (retain shape but less bumpy)
+        y = 0.78 * y + 0.22 * prev;
 
         if (downhillOnly) {
           // enforce non-increasing and respect max drop
@@ -1495,8 +1608,8 @@
         if (dy > stepMax) y = prev + stepMax;
         if (dy < -stepMax) y = prev - stepMax;
 
-        // smoothing
-        y = 0.70 * y + 0.30 * prev;
+        // smoothing tuned for “collines” (retain shape but less bumpy)
+        y = 0.78 * y + 0.22 * prev;
 
         if (downhillOnly) {
           // y[left] >= y[right] to keep non-increasing globally
