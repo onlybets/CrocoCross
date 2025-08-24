@@ -614,7 +614,7 @@
       base: -2.0,                     // average ground height (m)
       amp1: 1.6, freq1: 0.03,         // hills ~33 m
       amp2: 1.0, freq2: 0.08,         // rollers ~12.5 m
-      amp3: 0.35, freq3: 0.16         // subtle micro (~6.25 m)
+      amp3: 0.0, freq3: 0.16         // subtle micro (~6.25 m)
     },
 
     // Long downhill overlay (deterministic spans)
@@ -646,7 +646,7 @@
 
     // Small “bumps” overlay (rare; adds sharper micro undulations locally)
     BUMPS: {
-      PROB: 0.12,          // chance to start a bumps window at a chunk start
+      PROB: 0.0,          // chance to start a bumps window at a chunk start
       LEN_MIN: 8,          // meters
       LEN_MAX: 18,         // meters
       AMP_MIN: 0.25,       // meters vertical
@@ -684,7 +684,7 @@
     START_SAFE_UNTIL: 100.0,          // no holes before this X (m) from start
     START_FLAT_UNTIL: 8.0,           // short flat pad near start
     START_BLEND_LEN: 12.0,            // smooth blend; hills visible by ~20 m
-    SEAM_BLEND_LEN: 6.0,             // meters to blend first points of each new chunk to previous end to avoid steps
+    SEAM_BLEND_LEN: 12.0,             // meters to blend first points of each new chunk to previous end to avoid steps
 
     // Jump feasibility heuristic (caps hole width to what is realistically jumpable)
     SAFE_JUMP: {
