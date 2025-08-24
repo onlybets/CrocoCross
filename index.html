@@ -414,7 +414,7 @@
 }
     /* Leaderboard box */
     .go-lbbox{position:absolute;left:50%;bottom:23%;transform:translate(-50%,-50%);background:rgba(255,255,255,.96);border:4px solid #333;border-radius:14px;padding:16px;min-width:min(86vw,520px);text-align:center;box-shadow:0 10px 24px rgba(0,0,0,.35);}
-    .go-lbbox .go-rank{font-weight:900;font-size:18px;margin-bottom:8px;}
+    .go-lbbox .go-rank{font-weight:900;font-size:30px;margin-bottom:8px;}
     .go-lbbox .go-lbrow{display:flex;gap:10px;justify-content:center;align-items:center;}
     .go-lbbox #nameInput{width:160px;font-size:22px;text-align:center;padding:8px 10px;border:3px solid #333;border-radius:10px;font-weight:900;}
     .go-lbbox #saveScoreBtn{font-size:18px;padding:10px 16px;border-width:4px;border-radius:12px;}
@@ -432,6 +432,54 @@
     /* Utility show classes for sequences */
     .show-pop{animation:popIn .22s ease-out forwards, fadeInUp .22s ease-out forwards;}
     .show-pop-slow{animation:popIn .28s ease-out forwards, fadeInUp .28s ease-out forwards;}
+    /* Character picker (top-right on home) */
+    .char-picker {
+      position: absolute;
+      right: clamp(16px, 3vw, 36px);
+      top: clamp(16px, 5vh, 56px);
+      z-index: 6;
+    }
+    .char-card {
+      display: flex;
+      gap: 10px;
+      background: rgba(255,255,255,0.92);
+      border: 4px solid #333;
+      border-radius: 12px;
+      padding: 8px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+      backdrop-filter: blur(2px);
+    }
+    .char-item {
+      width: clamp(56px, 7vw, 72px);
+      height: clamp(56px, 7vw, 72px);
+      border: 3px solid #333;
+      border-radius: 10px;
+      overflow: hidden;
+      cursor: pointer;
+      background: #fff;
+      padding: 0;
+      margin: 0;
+      transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+    }
+    .char-item img {
+      width: 100%;
+      height: 180%;
+      object-fit: cover;
+      object-position: top center; /* crop to show head */
+      display: block;
+    }
+    .char-item:hover { transform: translateY(-2px); }
+    .char-item.selected {
+      border-color: #2EE66B;
+      box-shadow: 0 6px 14px rgba(0,0,0,.25), 0 0 0 3px #2EE66B inset;
+      transform: scale(1.04);
+    }
+    .char-item.bump { animation: pick-bump .18s ease-out; }
+    @keyframes pick-bump {
+      0% { transform: scale(1.0); }
+      60% { transform: scale(1.08); }
+      100% { transform: scale(1.04); }
+    }
   </style>
 </head>
 <body>
@@ -442,6 +490,20 @@
     <img src="assets/img/crococross-logo.png" alt="CrocoCross" class="menu-logo" />
     <button id="playBtn" class="play-big">Play</button>
     <button id="leaderboardBtn" class="leaderboard-side">Leaderboard</button>
+    <div id="charPicker" class="char-picker">
+      <div class="char-card" role="group" aria-label="Choose character">
+        <!-- Order left->right is eagle, shiba, croco so that right->left reads croco, shiba, eagle -->
+        <button class="char-item" data-char="eagle" aria-label="Eagle">
+          <img src="assets/img/crococross-player-eagle.png" alt="Eagle" />
+        </button>
+        <button class="char-item" data-char="shiba" aria-label="Shiba">
+          <img src="assets/img/crococross-player-shiba.png" alt="Shiba" />
+        </button>
+        <button class="char-item" data-char="croco" aria-label="Croco">
+          <img src="assets/img/crococross-player-croco.png" alt="Croco" />
+        </button>
+      </div>
+    </div>
     <div class="controls-card">
       <div class="controls-title">Controls</div>
       <div class="controls-rows">
@@ -706,7 +768,7 @@
       },
       CHASSIS_TILT_TORQUE: 40.0,
       SPRITE: {
-        path: 'assets/img/crococross-player.png',
+        path: 'assets/img/crococross-player-croco.png',
         widthMeters: 2.4,
         offsetX: 0.0,
         offsetY: -0.05,
@@ -1035,6 +1097,52 @@
   const goHomeBtn = document.getElementById('goHomeBtn');
   const goReplayBtn = document.getElementById('goReplayBtn');
   const goRank = document.getElementById('goRank');
+
+  // Character picker & persistence
+  const PLAYER_KEY = 'cc_player';
+  const PLAYER_ASSETS = {
+    croco: 'assets/img/crococross-player-croco.png',
+    shiba: 'assets/img/crococross-player-shiba.png',
+    eagle: 'assets/img/crococross-player-eagle.png'
+  };
+
+  function applyCharacter(char) {
+    if (!PLAYER_ASSETS[char]) char = 'croco';
+    try { localStorage.setItem(PLAYER_KEY, char); } catch {}
+    const newPath = PLAYER_ASSETS[char];
+    CONFIG.BIKE.SPRITE.path = newPath;
+    try {
+      riderLoaded = false;
+      riderImg.src = newPath;
+    } catch {}
+    // UI highlight
+    document.querySelectorAll('.char-item').forEach(el => {
+      const pick = el.getAttribute('data-char');
+      if (pick === char) el.classList.add('selected'); else el.classList.remove('selected');
+    });
+  }
+
+  // Initialize selection from storage (default: croco)
+  (function initCharacter() {
+    let ch = 'croco';
+    try {
+      const saved = localStorage.getItem(PLAYER_KEY);
+      if (saved && PLAYER_ASSETS[saved]) ch = saved;
+    } catch {}
+    applyCharacter(ch);
+  })();
+
+  // Click handling with simple bump animation
+  const charPickerEl = document.getElementById('charPicker');
+  if (charPickerEl) {
+    charPickerEl.addEventListener('click', (ev) => {
+      const el = ev.target.closest('.char-item');
+      if (!el) return;
+      const ch = el.getAttribute('data-char');
+      applyCharacter(ch);
+      el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    });
+  }
 
   // Input
   const keys = { up: false, down: false, left: false, right: false, debug: false, pause: false };
