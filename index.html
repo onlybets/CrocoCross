@@ -414,7 +414,7 @@
 }
     /* Leaderboard box */
     .go-lbbox{position:absolute;left:50%;bottom:23%;transform:translate(-50%,-50%);background:rgba(255,255,255,.96);border:4px solid #333;border-radius:14px;padding:16px;min-width:min(86vw,520px);text-align:center;box-shadow:0 10px 24px rgba(0,0,0,.35);}
-    .go-lbbox .go-rank{font-weight:900;font-size:30px;margin-bottom:8px;}
+    .go-lbbox .go-rank{font-weight:900;font-size:18px;margin-bottom:8px;}
     .go-lbbox .go-lbrow{display:flex;gap:10px;justify-content:center;align-items:center;}
     .go-lbbox #nameInput{width:160px;font-size:22px;text-align:center;padding:8px 10px;border:3px solid #333;border-radius:10px;font-weight:900;}
     .go-lbbox #saveScoreBtn{font-size:18px;padding:10px 16px;border-width:4px;border-radius:12px;}
@@ -463,7 +463,7 @@
     }
     .char-item img {
       width: 100%;
-      height: 180%;
+      height: 100%;
       object-fit: cover;
       object-position: top center; /* crop to show head */
       display: block;
@@ -595,203 +595,316 @@
 
   // CONFIG - tunables in one place
   const CONFIG = {
-    SCALE: 40,                        // px per meter
-    GRAVITY: 9.81,                    // m/s^2
-    FIXED_HZ: 60,                     // physics Hz
-    CHUNK_LENGTH: 60,                 // meters per terrain chunk
-    SAMPLE_DX: 1.0,                   // meter sampling step
-    GROUND_THICK: 4,                  // line width for drawing contour
+    // UNITÉS D'AFFICHAGE — pixels par mètre. Plus grand = zoom visuel plus fort. Plage conseillée: 20..80.
+    SCALE: 40,
+    // GRAVITÉ — accélération (m/s^2). ~9.81 pour la Terre. Plus bas = sauts flottants. Plage sûre: 4..20.
+    GRAVITY: 9.81,
+    // FRÉQUENCE PHYSIQUE — pas fixe de simulation (Hz). Plus haut = plus stable/cher CPU. 30..120.
+    FIXED_HZ: 60,
+    // LONGUEUR D'UN CHUNK — taille (m) d'un tronçon de terrain. Plus grand = moins de corps, transitions plus rares. 30..120.
+    CHUNK_LENGTH: 60,
+    // PAS D'ÉCHANTILLONNAGE — distance (m) entre points du profil de terrain. Plus petit = plus lisse/plus coûteux. 0.25..2.
+    SAMPLE_DX: 1.0,
+    // EPAISSEUR TRAIT SOL — largeur (px) de l'outline du sol (visuel uniquement). 2..8.
+    GROUND_THICK: 4,
+    // FROTTEMENT SOL — adhérence. Plus haut = pneus accrochent davantage. 0..2.
     GROUND_FRICTION: 1.2,
+    // REBOND SOL — restitution (bounciness). 0 = pas de rebond. 0..0.5 recommandé.
     GROUND_RESTITUTION: 0.0,
 
-    BASELINE_Y: -20,                  // for ground fill (below the lowest terrain in chunk)
+    // BASELINE Y — profondeur de remplissage du sol sous le terrain (m). Plus négatif = remplissage plus profond. Visuel uniquement.
+    BASELINE_Y: -20,
 
+    // VIES MAX — nombre de vies avant Game Over. Entier 1..10 typique.
     MAX_LIVES: 5,
-    CHECKPOINT_EVERY: 200,            // meters
+    // INTERVALLE CHECKPOINT — espacement (m) entre checkpoints. Plus grand = checkpoints plus rares. 50..400.
+    CHECKPOINT_EVERY: 200,
 
-    // Terrain noise
+    // BRUIT (NOISE) — paramètres des sinusoïdes de relief de base.
     NOISE: {
-      base: -2.0,                     // average ground height (m)
-      amp1: 1.6, freq1: 0.03,         // hills ~33 m
-      amp2: 1.0, freq2: 0.08,         // rollers ~12.5 m
-      amp3: 0.0, freq3: 0.16         // subtle micro (~6.25 m)
+      // ALTITUDE MOYENNE — niveau moyen du terrain (m). -6..+6.
+      base: -2.0,
+      // GROSSES COLLINES — amplitude/fréquence 1. amp: 0..4, freq: 0.01..0.10.
+      amp1: 1.6, freq1: 0.03,
+      // ROLLERS MOYENS — amplitude/fréquence 2. amp: 0..3, freq: 0.04..0.14.
+      amp2: 1.0, freq2: 0.08,
+      // MICRO RELIEFS — amplitude/fréquence 3. amp: 0..1, freq: 0.10..0.30.
+      amp3: 0.35, freq3: 0.16
     },
 
-    // Long downhill overlay (deterministic spans)
+    // DESCENT — longues descentes occasionnelles.
     DESCENT: {
+      // PROBABILITÉ de démarrer une descente à l'entrée d'un chunk. 0..1.
       PROB: 0.14,
+      // CHANCE de descente longue. 0..1.
       LONG_PROB: 0.05,
-      SLOPE_MIN: 0.03,       // minimal |slope| (tanθ) for the downhill bias
-      SLOPE_MAX_FRAC: 0.55,  // cap slope to a fraction of current difficulty.slopeMax
+      // PENTE MIN (tanθ) appliquée. 0.01..0.20. Plus haut = descentes plus fortes.
+      SLOPE_MIN: 0.03,
+      // FRACTION du slopeMax courant permise. 0..1. Plus haut = descentes plus raides.
+      SLOPE_MAX_FRAC: 0.55,
+      // LONGUEURS (m) pour descentes courtes. 10..200.
       LEN_MIN: 40, LEN_MAX: 80,
+      // LONGUEURS (m) pour descentes longues. 60..300.
       LLEN_MIN: 90, LLEN_MAX: 120,
 
-      // Calm filter applied inside descent spans (reduces micro-rollers)
+      // PASSES DE LISSAGE dans la descente (réduit micro-rollers). 0..3.
       CALM_PASSES: 1,
+      // POIDS DU LISSAGE (0 = off, 1 = très lissé).
       CALM_MIX: 0.5,
 
-      // Short rebound uphill after a descent
+      // REBOND — petite montée après la descente.
       REBOUND: {
+        // LONGUEUR (m) du rebond. 2..20.
         LEN_MIN: 6,
         LEN_MAX: 12,
+        // PENTE POSITIVE (tanθ) du rebond. 0.005..0.05.
         SLOPE_MIN: 0.012,
         SLOPE_MAX: 0.020
       },
 
-      // Post-descent cooldown (compress only positive slopes for a short window)
+      // COOLDOWN — compression des pentes positives après descente.
+      // LONGUEUR (m) de la fenêtre de cooldown. 6..40.
       COOL_LEN_MIN: 12,
       COOL_LEN_MAX: 26,
+      // FACTEUR multiplicatif sur pentes positives pendant cooldown. 0..1.
       COOL_POS_FRAC: 0.5
     },
 
-    // Small “bumps” overlay (rare; adds sharper micro undulations locally)
+    // BUMPS — petites vagues plus marquées (rares).
     BUMPS: {
-      PROB: 0.0,          // chance to start a bumps window at a chunk start
-      LEN_MIN: 8,          // meters
-      LEN_MAX: 18,         // meters
-      AMP_MIN: 0.25,       // meters vertical
+      // PROBABILITÉ de fenêtre de bosses par chunk. 0..1.
+      PROB: 0.12,
+      // LONGUEUR (m) de la fenêtre. 4..30.
+      LEN_MIN: 8,
+      LEN_MAX: 18,
+      // AMPLITUDE (m). 0.1..1.0.
+      AMP_MIN: 0.25,
       AMP_MAX: 0.55,
-      FREQ: 0.35           // ~2.9 m wavelength inside the window
+      // FRÉQUENCE interne (~1/longueur d’onde). 0.1..1.0.
+      FREQ: 0.35
     },
 
-    // Baseline + Relief model
+    // BASELINE — tendance monotone (descendante) du terrain.
     BASELINE: {
+      // CHANCE d'avoir un segment très long. 0..1.
       LONG_PROB: 0.10,
+      // LONGUEURS (m) des segments standards. 20..200.
       LEN_MIN: 35, LEN_MAX: 100,
-      LLEN_MIN: 80, LLEN_MAX: 140,  // éviter de trop longues pentes douces (~400m)
+      // LONGUEURS (m) des segments longs. 60..300.
+      LLEN_MIN: 80, LLEN_MAX: 140,
+      // PENTE MIN négative en valeur absolue (non-positive). 0.001..0.02.
       SLOPE_MIN: 0.004,
+      // FRACTION de slopeMax autorisée pour la baseline. 0..1.
       SLOPE_MAX_FRAC: 0.45
     },
+    // RELIEF — compression des pentes positives.
     RELIEF: {
+      // FACTEUR sur les pentes positives (1 = aucune compression). 0..1.
       POS_SLOPE_FRAC: 0.34
     },
+    // ROLLERS — anti-montée prolongée.
     ROLLERS: {
+      // LONGUEUR MAX (m) d'une montée continue avant rupture forcée. 4..40.
       MAX_UP_RUN: 12.0
     },
 
-    // Difficulty progression
-    SLOPE_MAX_START: 0.6,             // tan(theta) ~ slope (0.6 ~ 31 deg)
-    SLOPE_MAX_END: 0.9,               // max slope later (~42 deg cap)
-    HOLE_PROB_START: 0.10,            // early probability
-    HOLE_PROB_END: 0.30,              // later probability
+    // PROGRESSION DE DIFFICULTÉ — plafonds/risques qui augmentent avec la distance.
+    // PENTE MAX initiale (tanθ). 0.2..1.2.
+    SLOPE_MAX_START: 0.6,
+    // PENTE MAX finale (tanθ). 0.4..1.5.
+    SLOPE_MAX_END: 0.9,
+    // PROBABILITÉ de trous (si activés) au début/fin. 0..1.
+    HOLE_PROB_START: 0.10,
+    HOLE_PROB_END: 0.30,
+    // LARGEUR MIN (m) des trous. 1..8.
     HOLE_W_MIN: 4.5,
+    // LARGEUR MAX (m) des trous au début/fin. 3..16.
     HOLE_W_MAX_START: 7.0,
     HOLE_W_MAX_END: 10.0,
-    HOLE_RUNUP_MIN: 7.0,              // (m)
+    // ÉLAN MIN (m) avant trou. 3..20.
+    HOLE_RUNUP_MIN: 7.0,
+    // RÉCEPTION MIN (m) après trou. 3..20.
     HOLE_LAND_MIN: 7.0,
-    HOLE_RAMP_LEN: 6.0,               // meters of ramp shaping before hole
-    HOLE_MIN_SPACING: 35.0,           // avoid back-to-back holes too close
-    START_SAFE_UNTIL: 100.0,          // no holes before this X (m) from start
-    START_FLAT_UNTIL: 8.0,           // short flat pad near start
-    START_BLEND_LEN: 12.0,            // smooth blend; hills visible by ~20 m
-    SEAM_BLEND_LEN: 12.0,             // meters to blend first points of each new chunk to previous end to avoid steps
+    // LONGUEUR (m) de modelage de la lèvre. 2..12.
+    HOLE_RAMP_LEN: 6.0,
+    // ESPACEMENT MIN (m) entre trous. 10..100.
+    HOLE_MIN_SPACING: 35.0,
+    // ZONE SAFE — pas de trous avant cette distance (m). 0..500.
+    START_SAFE_UNTIL: 100.0,
+    // PLATEAU DE DÉPART — longueur (m) plate initiale. 0..30.
+    START_FLAT_UNTIL: 8.0,
+    // FONDU VERS RELIEF — longueur (m). 4..30.
+    START_BLEND_LEN: 12.0,
+    // LISSAGE DE JOINT — longueur (m) d’alignement entre chunks. 0..20.
+    SEAM_BLEND_LEN: 6.0,
 
-    // Jump feasibility heuristic (caps hole width to what is realistically jumpable)
+    // SAFE_JUMP — heuristique de saut réaliste.
     SAFE_JUMP: {
-      JUMP_SPEED_START: 7.0,          // m/s early game
-      JUMP_SPEED_END: 12.0,           // m/s late game
-      MIN_TAKEOFF_ANGLE: 0.17,        // radians (~10 deg)
-      MAX_TAKEOFF_ANGLE: 0.61,        // radians (~35 deg)
-      RUNUP_SLOPE_MAX: 0.25,          // tan(theta) ~ 0.25 (~14 deg)
-      LANDING_SLOPE_MAX: 0.35,        // ~19 deg
-      SAFETY_MARGIN: 1.2              // meters subtracted from theoretical range
+      // VITESSE DE SAUT (m/s) début/fin de progression. 4..20.
+      JUMP_SPEED_START: 7.0,
+      JUMP_SPEED_END: 12.0,
+      // ANGLE MIN de décollage (rad). 0.10..0.35.
+      MIN_TAKEOFF_ANGLE: 0.17,
+      // ANGLE MAX de décollage (rad). 0.30..0.80.
+      MAX_TAKEOFF_ANGLE: 0.61,
+      // PENTE MAX sur l'élan. 0.1..0.5.
+      RUNUP_SLOPE_MAX: 0.25,
+      // PENTE MAX à la réception. 0.1..0.5.
+      LANDING_SLOPE_MAX: 0.35,
+      // MARGE DE SÉCURITÉ (m) retranchée à la portée théorique. 0..3.
+      SAFETY_MARGIN: 1.2
     },
-    // Checkpoint safety near lips and forward-ground availability
-    CP_SAFE_FORWARD: 6.0,             // meters of solid ground required ahead of a checkpoint
-    CP_LIP_MARGIN: 0.8,               // avoid placing directly on a hole lip (± margin)
-    CP_SEARCH_RADIUS: 10.0,           // search window around nominal CP X
-    CP_STEP: 0.5,                     // scan step while searching a safe CP spot
+    // CHECKPOINTS — sécurité et recherche locale.
+    // LONGUEUR (m) de terrain solide requise devant un checkpoint. 2..20.
+    CP_SAFE_FORWARD: 6.0,
+    // MARGE (m) pour éviter les lèvres de trous. 0..2.
+    CP_LIP_MARGIN: 0.8,
+    // RAYON (m) de recherche autour du X cible. 2..30.
+    CP_SEARCH_RADIUS: 10.0,
+    // PAS (m) de scan lors de la recherche. 0.1..1.0.
+    CP_STEP: 0.5,
 
-    // Decorative content (images) — counts per 60 m chunk
+    // DECOR — densités/échelles d'éléments décoratifs par chunk (~60 m).
     DECOR: {
+      // ARBRES SUR CRÊTE — nb moyen. 0..6.
       treePerChunk: 2.0,
+      // ROCHERS SUR CRÊTE — nb moyen. 0..4.
       rockPerChunk: 1.2,
+      // BOTTES DE FOIN SUR CRÊTE — nb moyen. 0..3.
       hayPerChunk: 0.6,
+      // ESPACEMENT MIN (m) entre éléments. 2..20.
       minSpacing: 7.0,
+      // ÉCHELLE ARBRES min/max. 0.5..2.0.
       treeScaleMin: 0.9,
       treeScaleMax: 1.25,
+      // ÉCHELLE ROCHERS min/max. 0.5..2.0.
       rockScaleMin: 0.85,
       rockScaleMax: 1.15,
+      // DENSITÉ ARBRES/ROCHERS/FOIN sous la ligne de sol. 0..4.
       treeUnder: 2.0,
       rockUnder: 2.0,
       hayUnder: 2.0,
+      // SUPPORTERS sous la ligne de sol. 0..4.
       sup1PerChunk: 2.0,
       sup2PerChunk: 2.0,
+      // FAUNE sous la ligne de sol (lapin/voiture/biche). 0..4.
       rabbitUnder: 2.0,
       carUnder: 2.0,
       deerUnder: 2.0,
+      // DÉCALAGE VERTICAL (m) au-dessus de la crête pour ancrage top. -0.1..+0.1.
       topAnchorMin: -0.03,
       topAnchorMax: -0.01,
+      // PROFONDEUR (m) d'enfouissement dans l'herbe. 0.5..5.
       underDepthMin: 1.8,
       underDepthMax: 3.5
     },
 
-    // Image clouds (parallax)
+    // NUAGE (CLOUDS) — arrière-plan avec parallaxe.
     CLOUDS: {
+      // NOMBRE de sprites nuages. 0..12.
       count: 6,
+      // FACTEUR de parallaxe (0 = fixe, 1 = suit entièrement la caméra). 0..1.
       parallax: 0.06,
+      // ÉCHELLE min/max des sprites. 0.2..2.0.
       scaleMin: 0.5,
       scaleMax: 0.9
     },
 
-    // Audio
+    // AUDIO — réglages d'ambiance.
     AUDIO: {
-      default: 'off',        // 'music1' | 'music2' | 'off' (default OFF per spec)
+      // MODE par défaut ('music1' | 'music2' | 'off'). N'affecte pas le volume.
+      default: 'off',
+      // VOLUME (0..1) des pistes.
       volume: 0.2
     },
 
-    // Bike params
+    // BIKE — paramètres mécaniques et visuels du véhicule.
     BIKE: {
-      CHASSIS: { w: 2.0, h: 0.5, density: 1.2, angularDamping: 0.5, friction: 0.7 },
+      // CHÂSSIS — dimensions/densité/frottement/ammort. angulaire.
+      CHASSIS: { w: 0.5, h: 0.5, density: 1.2, angularDamping: 0.5, friction: 0.7 },
+      // ROUES — rayon/densité/frottement/restitution.
       WHEEL:   { r: 0.45, density: 1.0, friction: 1.7, restitution: 0.0 },
+      // CASQUE (capteur) — rayon du capteur de tête (collision douce).
       HELMET:  { r: 0.20 },
+      // MOYEUX — offsets X et hauteur Y (m) des roues.
       HUBS:    { rearOffsetX: -0.75, frontOffsetX: 0.85, hubY: -0.30 },
+      // MOTEUR — couple et dynamique de consigne.
       MOTOR: {
-        // Clean, snappy, progressive drive params
+        // COUPLE MAX (Nm virtuels). 20..200.
         maxTorque: 90.0,
-        speedLimit: 140.0,   // faster top speed
-        ACCEL: 28.0,        // rad/s^2 forward build-up (per second)
-        BRAKE: 26.0,        // rad/s^2 toward 0 when flipping
-        EPS: 0.25,          // near-zero dead-band for flip detection
-        epsNoBrake: 0.45,   // slack for “never brake on re-throttle”
-        LAUNCH_TORQUE: 7.0, // softer torque < LAUNCH_SPEED (very gentle)
-        LAUNCH_SPEED: 50.0    // soft-launch up to ~18 km/h
+        // LIMITE VITESSE ANGULAIRE (rad/s). 40..200.
+        speedLimit: 140.0,
+        // RAMPE ACCEL (rad/s^2). 5..80.
+        ACCEL: 28.0,
+        // RAMPE BRAKE vers 0 (rad/s^2). 5..80.
+        BRAKE: 26.0,
+        // ZONE MORTE près de 0 (détection sens). 0..1.
+        EPS: 0.25,
+        // TOLÉRANCE anti-frein moteur en re-accélération. 0..2.
+        epsNoBrake: 0.45,
+        // COUPLE DÉMARRAGE doux sous LAUNCH_SPEED. 0..50.
+        LAUNCH_TORQUE: 7.0,
+        // SEUIL DÉMARRAGE doux (rad/s). 10..80.
+        LAUNCH_SPEED: 50.0
       },
+      // INCLINAISON (AIR) — comportement en l'air.
       TILT: {
-        SIGN: 1,            // Right = back (nose-up), Left = forward (nose-down). Flip to -1 if your build is inverted.
-        BASE: 8.0,          // gentler initial “impulse” in air
-        ACCEL: 70.0,        // slower build for smoother tilt
-        MAX: 20.0,          // lower cap for smoother feel
-        DECAY: 110.0,       // gentler release
-        HYSTERESIS_MS: 80,  // a bit higher to avoid flicker near lips
-        GROUND_SCALE: 0.0   // no tilt when grounded
+        // SIGNE — sens de la bascule: 1 ou -1 selon votre mapping.
+        SIGN: 1,
+        // IMPULSION DE BASE. 0..50.
+        BASE: 8.0,
+        // ACCEL de magnitude d'inclinaison. 10..150.
+        ACCEL: 70.0,
+        // LIMITE MAX de magnitude. 5..120.
+        MAX: 20.0,
+        // DÉCROISSANCE (retour) quand aucune touche. 20..300.
+        DECAY: 110.0,
+        // HYSTÉRÉSIS AIR/GROUND (ms). 10..200.
+        HYSTERESIS_MS: 80,
+        // ÉCHELLE AU SOL (0 = pas de tilt au sol). 0..1.
+        GROUND_SCALE: 0.0
       },
+      // COUPLE D'INCLINAISON appliqué au châssis (Nm par unité). 5..200.
       CHASSIS_TILT_TORQUE: 40.0,
+      // SPRITE — affichage du pilote.
       SPRITE: {
+        // CHEMIN de l'image du pilote sélectionné.
         path: 'assets/img/crococross-player-croco.png',
+        // LARGEUR (m) du sprite dans le monde. 1..4.
         widthMeters: 2.4,
+        // DÉCALAGES (m) X/Y du sprite par rapport au châssis. -1..1.
         offsetX: 0.0,
         offsetY: -0.05,
+        // CLIPPER dans le rectangle du châssis si true.
         clipToChassis: false,
+        // AFFICHER le sprite (true/false).
         show: true
       }
     },
 
-    // Camera
+    // CAMERA — suivi du joueur.
     CAM: {
-      lookAhead: 5.0,       // meters
-      yLag: 0.08,           // 0..1
+      // AVANCE en X (m). 0..12.
+      lookAhead: 5.0,
+      // INERTIE VERTICALE (0..1). Plus haut = suit plus vite.
+      yLag: 0.08,
+      // INERTIE HORIZONTALE (0..1).
       xLag: 0.12,
-      snapX: 50.0,          // meters; hard snap threshold in X
-      snapY: 25.0,          // meters; hard snap threshold in Y
-      groundPadBottom: 10.0 // meters extra below min Y for fills
+      // SEUIL SNAP X (m) — rattrapage instantané. 5..200.
+      snapX: 50.0,
+      // SEUIL SNAP Y (m). 5..200.
+      snapY: 25.0,
+      // MARGE SOL BAS — m supplémentaire sous l’écran pour le remplissage.
+      groundPadBottom: 10.0
     },
 
-    // World shifting (avoid float drift)
+    // RECENTRAGE — évite la dérive flottante des coordonnées.
+    // DISTANCE (m) avant recentrage horizontal du monde. 500..10000.
     RECENTER_X: 3500.0,
 
-    // Misc
-    INVULN_TIME: 1.0,       // seconds after respawn
+    // INVULNÉRABILITÉ (s) après respawn. 0..5.
+    INVULN_TIME: 1.0,
+    // MODE DEBUG — active le rendu d’aides. true/false.
     DEBUG: false
   };
 
@@ -1318,10 +1431,6 @@
       const xEnd = xStart + length;
       const pts = [];
       let minY = Infinity;
-
-
-
-
 
       // sample heights
       const yFlat0 = this.sampleHeight(0);
@@ -3907,44 +4016,6 @@
     try { if (bike) bike.dead = false; } catch {}
     beginDying();
     return;
-    if (ignoreLives || lives > 0) {
-      // Respawn
-      const cp = currentCheckpoint;
-      const y = cp.y + 0.6;
-      // Ensure visuals/terrain around the checkpoint before respawn
-      terrain.rebuildAllGfx && terrain.rebuildAllGfx();
-      terrain.ensureAhead(cp.x + 120, maxXReached);
-      if (!terrain.hasGfxNear(cp.x, CONFIG.CHUNK_LENGTH)) {
-        terrain.rebuildAllGfx();
-        terrain.ensureAhead(cp.x + 2 * CONFIG.CHUNK_LENGTH, maxXReached);
-      }
-      // Remove existing bike
-      if (bike) bike.destroy();
-      // Nudge slightly behind the checkpoint to avoid spawning exactly on a lip
-      const xSpawn = cp.x - 0.3;
-      bike = new Bike(world, { x: xSpawn, y: y });
-      motorTarget = 0;
-      bike.invulnTimer = CONFIG.INVULN_TIME;
-    } else {
-      // Game Over
-      finalScoreText.textContent = `Score: ${Math.floor(maxXReached)} m`;
-      // If top 10 or if list less than 10, prompt for name; otherwise go straight to leaderboard
-      const lb = loadLB();
-      const qualifies = lb.length < 10 || maxXReached > (lb[lb.length - 1]?.score || 0);
-      if (qualifies) {
-        namePrompt.classList.remove('hidden');
-        saveScoreBtn.classList.remove('hidden');
-        nameInput.value = '';
-        saveScoreBtn.disabled = true;
-        setTimeout(() => nameInput.focus(), 0);
-        setState(STATE.GAMEOVER);
-      } else {
-        namePrompt.classList.add('hidden');
-        saveScoreBtn.classList.add('hidden');
-        renderLeaderboard();
-        setState(STATE.LEADERBOARD);
-      }
-    }
   }
 
   function submitScoreAndHide() {
