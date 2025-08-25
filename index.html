@@ -789,14 +789,14 @@
       sup2PerChunk: 2.0,
       // FAUNE sous la ligne de sol (lapin/voiture/biche). 0..4.
       rabbitUnder: 2.0,
-      carUnder: 2.0,
+      carUnder: 1.0,
       deerUnder: 2.0,
       // DÉCALAGE VERTICAL (m) au-dessus de la crête pour ancrage top. -0.1..+0.1.
       topAnchorMin: -0.03,
       topAnchorMax: -0.01,
       // PROFONDEUR (m) d'enfouissement dans l'herbe. 0.5..5.
-      underDepthMin: 1.8,
-      underDepthMax: 3.5
+      underDepthMin: 3,
+      underDepthMax: 8
     },
 
     // NUAGE (CLOUDS) — arrière-plan avec parallaxe.
@@ -804,7 +804,7 @@
       // NOMBRE de sprites nuages. 0..12.
       count: 6,
       // FACTEUR de parallaxe (0 = fixe, 1 = suit entièrement la caméra). 0..1.
-      parallax: 0.06,
+      parallax: 0.2,
       // ÉCHELLE min/max des sprites. 0.2..2.0.
       scaleMin: 0.5,
       scaleMax: 0.9
@@ -854,9 +854,9 @@
         // IMPULSION DE BASE. 0..50.
         BASE: 8.0,
         // ACCEL de magnitude d'inclinaison. 10..150.
-        ACCEL: 70.0,
+        ACCEL: 45.0,
         // LIMITE MAX de magnitude. 5..120.
-        MAX: 20.0,
+        MAX: 10.0,
         // DÉCROISSANCE (retour) quand aucune touche. 20..300.
         DECAY: 110.0,
         // HYSTÉRÉSIS AIR/GROUND (ms). 10..200.
