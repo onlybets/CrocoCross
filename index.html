@@ -404,6 +404,7 @@
 #goTotal .go-label{
   background:transparent;border:none;border-radius:0;padding:0;color:#000;text-shadow:none;
   font-weight:900;text-transform:uppercase;font-family:"Arial Black", Impact, "Segoe UI Black", system-ui, sans-serif;
+  font-size: 30px;
 }
 #goTotal .go-value{
   font-size:clamp(56px,10vw,120px);
@@ -821,7 +822,7 @@
     // BIKE — paramètres mécaniques et visuels du véhicule.
     BIKE: {
       // CHÂSSIS — dimensions/densité/frottement/ammort. angulaire.
-      CHASSIS: { w: 0.5, h: 0.5, density: 1.2, angularDamping: 0.5, friction: 0.7 },
+      CHASSIS: { w: 0.5, h: 0.7, density: 1.2, angularDamping: 0.5, friction: 0.7 },
       // ROUES — rayon/densité/frottement/restitution.
       WHEEL:   { r: 0.45, density: 1.0, friction: 1.7, restitution: 0.0 },
       // CASQUE (capteur) — rayon du capteur de tête (collision douce).
@@ -903,7 +904,7 @@
     RECENTER_X: 3500.0,
 
     // INVULNÉRABILITÉ (s) après respawn. 0..5.
-    INVULN_TIME: 1.0,
+    INVULN_TIME: 2.0,
     // MODE DEBUG — active le rendu d’aides. true/false.
     DEBUG: false
   };
